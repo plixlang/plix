@@ -1,0 +1,114 @@
+// fuzz_gen: deterministic random *program* generator for parity fuzzing.
+// Usage: plix run tests/fuzz_gen.px <seed>
+// Emits a self-contained, checker-VALID Plix program on stdout; the same
+// seed reproduces the same program everywhere (private LCG, 62-bit safe).
+
+import "sys";
+
+auto g_seed = 1;
+auto g_ctr = 0;
+auto g_vars = []; // in-scope numeric variables
+
+func reseed(s) {
+    g_seed = s % 2147483647;
+    if (g_seed <= 0) { g_seed = 1; }
+}
+
+// LCG (glibc constants); products stay far below 2^62
+func rnd(n) {
+    g_seed = (g_seed * 1103515245 + 12345) % 2147483648;
+    return g_seed % n;
+}
+
+func pick(xs) { return xs[rnd(len(xs))]; }
+func small_int() { return rnd(50); }
+func uniq(p) { g_ctr += 1; return "${p}${g_ctr}"; }
+
+func rint() {
+    auto k = rnd(4);
+    if (k == 0) { return "${small_int()}"; }
+    if (k == 1) { return "${rnd(1000000)}"; }
+    if (k == 2 && len(g_vars) > 0) { return pick(g_vars); }
+    return "n";
+}
+
+// --- int-typed expression -------------------------------------------------
+func gi(d) {
+    if (d <= 0) { return rint(); }
+    auto k = rnd(12);
+    if (k <= 2) {
+        return "(${gi(d-1)} ${pick(["+", "-", "*", "%", "&", "|", "^"])} ${gi(d-1)})";
+    }
+    if (k == 3) { return "(${gi(d-1)} % (${gi(d-1)} | 1))"; }
+    if (k == 4) { return "(${gi(d-1)} ${pick(["<<", ">>"])} ${rnd(8)})"; }
+    if (k == 5) { return "(- ${gi(d-1)})"; }
+    if (k == 6) { return "(~ ${gi(d-1)})"; }
+    if (k == 7) { return "clamp(${rint()}, 0, 100)"; }
+    if (k == 8) { return "(${gb(d-1)} ? ${gi(d-1)} : ${gi(d-1)})"; }
+    if (k == 9) { return "abs(${gi(d-1)})"; }
+    return "f(${gi(d-1)}, ${rint()})";
+}
+
+// --- bool-typed expression ------------------------------------------------
+func gb(d) {
+    if (d <= 0) { return "(${gi(1)} ${pick(["<", "<=", ">", ">=", "==", "!="])} ${gi(1)})"; }
+    auto k = rnd(5);
+    if (k <= 1) { return "(${gi(d)} ${pick(["<", "<=", ">", ">=", "==", "!="])} ${gi(d)})"; }
+    if (k == 2) { return "(! ${gb(d-1)})"; }
+    if (k == 3) { return "(${gb(d-1)} && ${gb(d-1)})"; }
+    return "(${gb(d-1)} || ${gb(d-1)})";
+}
+
+// --- any numeric (may be float) -------------------------------------------
+func num(d) {
+    auto k = rnd(4);
+    if (k == 0) { return "(${gi(d)} / (${rnd(3)} + 1))"; }
+    if (k == 1) { return "(${gi(d)} / (${gi(d)} | 1))"; }
+    return gi(d);
+}
+
+func stmt(d) {
+    auto k = rnd(10);
+    if (k <= 3) {
+        auto v = uniq("x");
+        // keep tracked vars strictly int-typed (init via gi, never `/`),
+        // and build the body BEFORE declaring so v can't see itself
+        auto body = "auto ${v} = ${gi(2)};";
+        push(g_vars, v);
+        return body;
+    }
+    if (k == 4) {
+        return "say(str(${num(2)}), ${gb(1)});";
+    }
+    if (k == 5) {
+        return "if (${gb(2)}) { say(${num(1)}); } else { say(${num(1)}); }";
+    }
+    if (k == 6) {
+        auto v = uniq("i");
+        return "for (${v} in [${small_int()}, ${small_int()}, ${small_int()}]) { say(${v}, ${num(1)}); }";
+    }
+    if (k == 7) {
+        return "match ${rint()} { 0 => say(\"z\"), 1 => say(\"o\"), _ => say(${num(1)}) }";
+    }
+    if (k == 8) {
+        auto w = uniq("w");
+        return "auto ${w}: int = ${rnd(7)} + 1; while (${w} > 0) { ${w} -= 1; } say(${w});";
+    }
+    return "say(${num(2)}, ${num(1)}, \"ok${rnd(1000)}\");";
+}
+
+func main() {
+    auto args = sys.args();
+    auto seed = len(args) > 1 ? int(args[1]) : 1;
+    reseed(seed);
+    say("// fuzz seed ${seed}");
+    say("func f(a, b) { if (a < b) { return a * a + b; } return (a - b) | 3; }");
+    say("auto n = ${small_int()};");
+    push(g_vars, "n");
+    for (i in range(9)) {
+        say(stmt(2));
+    }
+    say("say(\"end\", n);");
+}
+
+main();

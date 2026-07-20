@@ -1,0 +1,12 @@
+// Plix example: recursive fibonacci (from the original grammar)
+func fibonacci(n) {
+    if (n <= 1) {
+        return n;
+    }
+    return fibonacci(n - 1) + fibonacci(n - 2);
+}
+
+auto start = clock();
+auto result = fibonacci(25);
+say("fibonacci(25) = ${result}");
+say("elapsed: ${round(clock() - start, 3)}s");

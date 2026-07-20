@@ -1,0 +1,71 @@
+// closures + match — the functional core of Plix.
+
+func make_counter(start) {
+    auto n = start;
+    return func() {
+        n = n + 1;      // captures `n` by reference (heap cell)
+        return n;
+    };
+}
+
+auto c1 = make_counter(10);
+auto c2 = make_counter(100);
+say("c1: ${c1()} ${c1()} ${c1()}");   // 11 12 13
+say("c2: ${c2()} ${c2()}");           // 101 102
+
+// closures as arguments
+func twice(f, x) {
+    return f(f(x));
+}
+auto add3 = func(x) { return x + 3; };
+say("twice(add3, 10) = ${twice(add3, 10)}");   // 16
+
+// match as a statement
+func describe(n) {
+    match n {
+        0 => say("zero"),
+        1 | 2 | 3 => say("small: ${n}"),
+        x => {
+            if (x % 2 == 0) {
+                say("even: ${x}");
+            } else {
+                say("odd: ${x}");
+            }
+        }
+    }
+}
+describe(0);
+describe(2);
+describe(7);
+describe(10);
+
+// match as an expression (value-producing)
+func sign_of(n) {
+    return match n {
+        0 => "zero",
+        _ => (n > 0) ? "positive" : "negative"
+    };
+}
+say("sign_of(0)=${sign_of(0)} sign_of(-4)=${sign_of(-4)} sign_of(9)=${sign_of(9)}");
+
+func grade(score) {
+    // integer buckets via match on the tens digit
+    return match idiv(score, 10) {
+        10 | 9 => "A",
+        8 | 7 => "B",
+        6 | 5 => "C",
+        _ => "F"
+    };
+}
+for (s in [95, 82, 63, 41]) {
+    say("score ${s} -> ${grade(s)}");
+}
+
+// nested closures / higher-order composition
+func compose(f, g) {
+    return func(x) { return f(g(x)); };
+}
+auto inc = func(x) { return x + 1; };
+auto dbl = func(x) { return x * 2; };
+auto inc_then_dbl = compose(dbl, inc);
+say("inc_then_dbl(5) = ${inc_then_dbl(5)}");   // 12

@@ -1,0 +1,14 @@
+// ownership errors (expected: plix check prints E0382/E0503/E0594)
+// Run:  plix check examples/ownership_err.px
+
+own a = "data";
+own b = a;          // a is moved here (explicit transfer)
+say(a);             // ERROR E0382: use of moved value `a`
+
+own xs = [1, 2, 3];
+own bad = [&xs, xs];  // ERROR E0503: cannot move `xs` while it is borrowed
+
+const LIMIT = 10;
+LIMIT = 20;         // ERROR E0594: cannot reassign a `const`
+
+say("this program intentionally does not run");

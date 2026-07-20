@@ -1,0 +1,1054 @@
+//! Plix runtime heap.
+//!
+//! Value representation (`V` = u64):
+//!   - `0`            => null
+//!   - `2` / `6`      => true / false
+//!   - odd values     => 63-bit signed int:  i = (v as i64) >> 1
+//!   - even, > 6      => pointer to a heap box (8-aligned)
+//!
+//! Memory management (the "auto" mode): every heap object carries a reference
+//! count. Objects are created with rc = 1 owned by the current *arena*
+//! (a per-call-frame temporary list). Containers retain what they store.
+//! Arenas are rewound per statement, so transient values are freed promptly;
+//! values that outlive their statement survive because the variable /
+//! container / global that holds them owns a reference. `own`-mode adds a
+//! static ownership checker in the compiler front-end (zero runtime cost).
+
+use std::cell::{Cell, RefCell, UnsafeCell};
+use std::collections::HashMap;
+use std::ffi::{c_char, c_void, CString};
+use std::sync::Mutex;
+
+pub type V = u64;
+
+pub const NULL: V = 0;
+pub const TRUE: V = 2;
+pub const FALSE: V = 6;
+
+pub const INT_MIN: i64 = -(1i64 << 62);
+pub const INT_MAX: i64 = (1i64 << 62) - 1;
+
+#[inline]
+pub fn is_int(v: V) -> bool {
+    v & 1 == 1
+}
+#[inline]
+pub fn is_ptr(v: V) -> bool {
+    (v & 1) == 0 && v > 6
+}
+#[inline]
+pub fn is_null(v: V) -> bool {
+    v == NULL
+}
+#[inline]
+pub fn is_bool(v: V) -> bool {
+    v == TRUE || v == FALSE
+}
+#[inline]
+pub fn as_int(v: V) -> i64 {
+    (v as i64) >> 1
+}
+#[inline]
+pub fn bool_of(b: bool) -> V {
+    if b {
+        TRUE
+    } else {
+        FALSE
+    }
+}
+
+/// Field descriptor of a `struct` (v0.3 OOP).
+pub struct FieldInfo {
+    pub name: String,
+    /// declared type: "" = any, else "int" | "float" | "str" | "bool" |
+    /// "array" | "map" | "func" | "any" | a struct name
+    pub ty: String,
+    pub default: V,
+    pub has_default: bool,
+}
+
+/// Runtime descriptor of a `struct` definition (lives in a `StructDef` box).
+pub struct StructInfo {
+    pub name: String,
+    pub fields: Vec<FieldInfo>,
+    pub index: HashMap<String, usize>,
+    /// inherent methods (impl Foo { ... }): name -> function value
+    pub methods: HashMap<String, V>,
+    /// trait implementations (impl Trait for Foo): trait -> (name -> fn)
+    pub traits: HashMap<String, HashMap<String, V>>,
+}
+
+/// Heap payloads. A heap box is a single allocation.
+pub enum HeapObj {
+    Float(f64),
+    Str(String),
+    Array(Vec<V>),
+    Map(HashMap<String, V>),
+    /// Mutable indirection used by captured variables (native closures).
+    Cell(V),
+    /// Native (Cranelift-compiled) closure: code pointer + captured cells.
+    ClsNative {
+        code: usize,
+        cells: Vec<V>,
+        name: String,
+    },
+    /// AST closure (created by the tree-walking interpreter).
+    ClsAst {
+        fn_id: u32,
+        /// Leaked Box of the interpreter environment wrapper.
+        env: usize,
+    },
+    /// Builtin function index into the builtin registry.
+    Builtin(u32),
+    /// Opaque CPython object (owned reference, GIL-protected).
+    PyObj(*mut c_void),
+    /// Cached `obj.attr` lookup on a CPython object for fast repeated calls.
+    PyBound(*mut c_void, CString),
+    /// A `struct` type object (value bound to the struct's name).
+    StructDef(Box<StructInfo>),
+    /// An instance of a struct; `fields` are in declaration order.
+    Instance { def: V, fields: Vec<V> },
+    /// Method bound to a receiver (`obj.meth` yields this); calling it
+    /// prepends `recv` to the argument list.
+    Bound { recv: V, f: V },
+}
+
+pub struct HeapBox {
+    pub rc: Cell<u32>,
+    pub obj: UnsafeCell<HeapObj>,
+}
+
+// ---------------------------------------------------------------------------
+// global lock: all heap operations run under this single mutex.  It is held
+// only for the duration of a single runtime operation and is never held
+// across calls back into Plix code (builtins that need to call Plix functions
+// take a `Caller` and invoke it outside any lock).
+// ---------------------------------------------------------------------------
+
+static RT: Mutex<()> = Mutex::new(());
+
+#[inline]
+pub fn lock() -> std::sync::MutexGuard<'static, ()> {
+    RT.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+// ---------------------------------------------------------------------------
+// runtime state: globals + arenas (guarded by `lock()`)
+// ---------------------------------------------------------------------------
+
+struct State {
+    globals: Vec<V>,
+    arenas: Vec<Vec<V>>,
+}
+
+static mut STATE: *mut State = std::ptr::null_mut();
+
+#[allow(static_mut_refs)]
+fn st() -> &'static mut State {
+    unsafe {
+        if STATE.is_null() {
+            STATE = Box::into_raw(Box::new(State {
+                globals: Vec::new(),
+                arenas: vec![Vec::new()], // base arena (top-level)
+            }));
+        }
+        &mut *STATE
+    }
+}
+
+#[inline]
+#[allow(static_mut_refs)]
+unsafe fn heap(v: V) -> &'static HeapBox {
+    &*(v as *const HeapBox)
+}
+
+// ---------------------------------------------------------------------------
+// allocation / refcounting — all functions below assume the lock is held.
+// ---------------------------------------------------------------------------
+
+/// Allocate a heap object. rc = 1, owned by the current arena.
+#[allow(static_mut_refs)]
+pub unsafe fn alloc_locked(obj: HeapObj) -> V {
+    let b = Box::new(HeapBox {
+        rc: Cell::new(1),
+        obj: UnsafeCell::new(obj),
+    });
+    let v = Box::into_raw(b) as V;
+    st().arenas.last_mut().unwrap().push(v);
+    v
+}
+
+#[allow(static_mut_refs)]
+pub unsafe fn retain_locked(v: V) {
+    if is_ptr(v) {
+        let b = heap(v);
+        b.rc.set(b.rc.get().saturating_add(1));
+    }
+}
+
+#[allow(static_mut_refs)]
+pub unsafe fn release_locked(v: V) {
+    if !is_ptr(v) {
+        return;
+    }
+    let b = heap(v);
+    let rc = b.rc.get();
+    if rc <= 1 {
+        free_locked(v);
+    } else {
+        b.rc.set(rc - 1);
+    }
+}
+
+#[allow(static_mut_refs)]
+unsafe fn free_locked(v: V) {
+    let b = heap(v);
+    // release children first
+    match &*b.obj.get() {
+        HeapObj::Array(items) => {
+            for &c in items.iter() {
+                release_locked(c);
+            }
+        }
+        HeapObj::Map(m) => {
+            for (_, &c) in m.iter() {
+                release_locked(c);
+            }
+        }
+        HeapObj::Cell(c) => release_locked(*c),
+        HeapObj::ClsNative { cells, .. } => {
+            for &c in cells.iter() {
+                release_locked(c);
+            }
+        }
+        HeapObj::ClsAst { .. } => { /* env is leaked for simplicity (program lifetime) */ }
+        HeapObj::PyObj(p) | HeapObj::PyBound(p, _) => {
+            crate::pyffi::py_decref_locked(*p);
+        }
+        HeapObj::StructDef(info) => {
+            for f in &info.fields {
+                release_locked(f.default);
+            }
+            for (_, &m) in info.methods.iter() {
+                release_locked(m);
+            }
+            for (_, tbl) in info.traits.iter() {
+                for (_, &m) in tbl.iter() {
+                    release_locked(m);
+                }
+            }
+        }
+        HeapObj::Instance { def, fields } => {
+            release_locked(*def);
+            for &c in fields.iter() {
+                release_locked(c);
+            }
+        }
+        HeapObj::Bound { recv, f } => {
+            release_locked(*recv);
+            release_locked(*f);
+        }
+        _ => {}
+    }
+    // reconstruct and drop the box (drops String/Vec/HashMap payloads)
+    drop(Box::from_raw(v as *mut HeapBox));
+}
+
+// ---------------------------------------------------------------------------
+// constructors (lock internally)
+// ---------------------------------------------------------------------------
+
+pub fn mk_int(i: i64) -> V {
+    if i >= INT_MIN && i <= INT_MAX {
+        ((i as u64) << 1) | 1
+    } else {
+        mk_float(i as f64)
+    }
+}
+
+pub fn mk_float_unchecked(f: f64) -> V {
+    let _g = lock();
+    unsafe { alloc_locked(HeapObj::Float(f)) }
+}
+
+pub fn mk_float(f: f64) -> V {
+    if f.is_nan() {
+        return mk_float_unchecked(f);
+    }
+    if f.fract() == 0.0 && f >= INT_MIN as f64 && f <= INT_MAX as f64 {
+        // large integral floats still stay floats to preserve type identity
+    }
+    mk_float_unchecked(f)
+}
+
+pub fn mk_str_from(s: &str) -> V {
+    let _g = lock();
+    unsafe { alloc_locked(HeapObj::Str(s.to_string())) }
+}
+
+pub fn mk_string(s: String) -> V {
+    let _g = lock();
+    unsafe { alloc_locked(HeapObj::Str(s)) }
+}
+
+pub fn mk_array(items: Vec<V>) -> V {
+    let _g = lock();
+    unsafe {
+        for &it in &items {
+            retain_locked(it);
+        }
+        alloc_locked(HeapObj::Array(items))
+    }
+}
+
+pub fn mk_map(m: HashMap<String, V>) -> V {
+    let _g = lock();
+    unsafe { mk_map_locked(m) }
+}
+
+/// Same, with the runtime lock already held by the caller.
+#[allow(static_mut_refs)]
+pub unsafe fn mk_map_locked(m: HashMap<String, V>) -> V {
+    for (_, &val) in m.iter() {
+        retain_locked(val);
+    }
+    alloc_locked(HeapObj::Map(m))
+}
+
+pub fn mk_cell(v: V) -> V {
+    let _g = lock();
+    unsafe {
+        retain_locked(v);
+        alloc_locked(HeapObj::Cell(v))
+    }
+}
+
+pub fn mk_cls_native(code: usize, cells: Vec<V>, name: String) -> V {
+    let _g = lock();
+    unsafe {
+        for &c in &cells {
+            retain_locked(c);
+        }
+        alloc_locked(HeapObj::ClsNative { code, cells, name })
+    }
+}
+
+pub fn mk_cls_ast(fn_id: u32, env: usize) -> V {
+    let _g = lock();
+    unsafe { alloc_locked(HeapObj::ClsAst { fn_id, env }) }
+}
+
+pub fn mk_builtin(id: u32) -> V {
+    let _g = lock();
+    unsafe { alloc_locked(HeapObj::Builtin(id)) }
+}
+
+pub fn mk_pyobj(p: *mut c_void) -> V {
+    let _g = lock();
+    unsafe { alloc_locked(HeapObj::PyObj(p)) }
+}
+
+pub fn mk_pybound(obj: *mut c_void, name: CString) -> V {
+    let _g = lock();
+    unsafe { alloc_locked(HeapObj::PyBound(obj, name)) }
+}
+
+pub fn mk_structdef(info: StructInfo) -> V {
+    let _g = lock();
+    unsafe { alloc_locked(HeapObj::StructDef(Box::new(info))) }
+}
+
+pub fn mk_instance(def: V, fields: Vec<V>) -> V {
+    let _g = lock();
+    unsafe {
+        retain_locked(def);
+        for &c in &fields {
+            retain_locked(c);
+        }
+        alloc_locked(HeapObj::Instance { def, fields })
+    }
+}
+
+pub fn mk_bound(recv: V, f: V) -> V {
+    let _g = lock();
+    unsafe {
+        retain_locked(recv);
+        retain_locked(f);
+        alloc_locked(HeapObj::Bound { recv, f })
+    }
+}
+
+/// StructInfo of a struct-def value (caller must ensure the kind).
+#[allow(static_mut_refs)]
+pub unsafe fn struct_info(def: V) -> Option<&'static StructInfo> {
+    if !is_ptr(def) {
+        return None;
+    }
+    match payload(def) {
+        HeapObj::StructDef(info) => Some(info),
+        _ => None,
+    }
+}
+
+/// StructInfo of the defining struct of an instance value.
+#[allow(static_mut_refs)]
+pub unsafe fn instance_info(inst: V) -> Option<&'static StructInfo> {
+    if !is_ptr(inst) {
+        return None;
+    }
+    match payload(inst) {
+        HeapObj::Instance { def, .. } => struct_info(*def),
+        _ => None,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// accessors (assume valid kinds; unchecked_* used after kind checks)
+// ---------------------------------------------------------------------------
+
+#[allow(static_mut_refs)]
+pub unsafe fn payload(v: V) -> &'static HeapObj {
+    &*(heap(v).obj.get())
+}
+
+#[allow(static_mut_refs)]
+pub unsafe fn payload_mut(v: V) -> *mut HeapObj {
+    heap(v).obj.get()
+}
+
+pub fn as_float(v: V) -> f64 {
+    if is_int(v) {
+        return as_int(v) as f64;
+    }
+    unsafe {
+        match payload(v) {
+            HeapObj::Float(f) => *f,
+            _ => f64::NAN,
+        }
+    }
+}
+
+pub fn as_str(v: V) -> String {
+    unsafe {
+        match payload(v) {
+            HeapObj::Str(s) => s.clone(),
+            _ => String::new(),
+        }
+    }
+}
+
+pub fn str_ref<R>(v: V, f: impl FnOnce(&str) -> R) -> R {
+    let _g = lock();
+    unsafe {
+        match payload(v) {
+            HeapObj::Str(s) => f(s),
+            _ => f(""),
+        }
+    }
+}
+
+pub fn array_ref<R>(v: V, f: impl FnOnce(&Vec<V>) -> R) -> R {
+    let _g = lock();
+    unsafe {
+        match payload(v) {
+            HeapObj::Array(items) => f(items),
+            _ => panic!("array_ref on non-array"),
+        }
+    }
+}
+
+pub fn map_ref<R>(v: V, f: impl FnOnce(&HashMap<String, V>) -> R) -> R {
+    let _g = lock();
+    unsafe {
+        match payload(v) {
+            HeapObj::Map(m) => f(m),
+            _ => panic!("map_ref on non-map"),
+        }
+    }
+}
+
+pub fn kind_name(v: V) -> &'static str {
+    if is_null(v) {
+        return "null";
+    }
+    if is_bool(v) {
+        return "bool";
+    }
+    if is_int(v) {
+        return "int";
+    }
+    unsafe {
+        match payload(v) {
+            HeapObj::Float(_) => "float",
+            HeapObj::Str(_) => "string",
+            HeapObj::Array(_) => "array",
+            HeapObj::Map(_) => "object",
+            HeapObj::Cell(_) => "cell",
+            HeapObj::ClsNative { .. } | HeapObj::ClsAst { .. } => "function",
+            HeapObj::Builtin(_) => "builtin",
+            HeapObj::PyObj(_) | HeapObj::PyBound(_, _) => "pyobject",
+            HeapObj::StructDef(_) => "struct",
+            HeapObj::Instance { .. } => "instance",
+            HeapObj::Bound { .. } => "bound method",
+        }
+    }
+}
+
+/// Display type name: for instances this is the struct's name ("Point"),
+/// for everything else the generic kind name. Used by typed error messages.
+pub fn type_name(v: V) -> String {
+    unsafe {
+        if let Some(name) = struct_name_of(v) {
+            return name;
+        }
+    }
+    kind_name(v).to_string()
+}
+
+/// If `v` is an instance, the name of its struct.
+pub unsafe fn struct_name_of(v: V) -> Option<String> {
+    if let HeapObj::Instance { def, .. } = payload_opt_pub(v)? {
+        if let Some(info) = struct_info(*def) {
+            return Some(info.name.clone());
+        }
+    }
+    None
+}
+
+/// payload_opt made available crate-wide (was private in value.rs).
+#[allow(static_mut_refs)]
+pub unsafe fn payload_opt_pub(v: V) -> Option<&'static HeapObj> {
+    if is_ptr(v) {
+        Some(payload(v))
+    } else {
+        None
+    }
+}
+
+// ---------------------------------------------------------------------------
+// arenas / frames
+// ---------------------------------------------------------------------------
+
+pub fn frame_push() {
+    let _g = lock();
+    unsafe { st().arenas.push(Vec::new()) }
+}
+
+/// Pop the current arena; `ret` (if any) survives because the caller's arena
+/// adopts it.
+#[allow(static_mut_refs)]
+pub fn frame_pop_return(ret: V) {
+    let _g = lock();
+    unsafe {
+        retain_locked(ret);
+        if let Some(arena) = st().arenas.pop() {
+            for v in arena {
+                release_locked(v);
+            }
+        }
+        if is_ptr(ret) && !st().arenas.is_empty() {
+            st().arenas.last_mut().unwrap().push(ret);
+        }
+        release_locked(ret);
+    }
+}
+
+/// Set an arena checkpoint (index) for the current frame.
+pub fn arena_checkpoint() -> usize {
+    let _g = lock();
+    unsafe { st().arenas.last().unwrap().len() }
+}
+
+/// Release everything allocated in the current frame since `cp`.
+#[allow(static_mut_refs)]
+pub fn arena_rewind(cp: usize) {
+    let _g = lock();
+    unsafe {
+        let arena = st().arenas.last_mut().unwrap();
+        if cp > arena.len() {
+            return;
+        }
+        let rest: Vec<V> = arena.drain(cp..).collect();
+        let _ = arena;
+        for v in rest {
+            release_locked(v);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// globals
+// ---------------------------------------------------------------------------
+
+pub fn globals_resize(n: usize) {
+    let _g = lock();
+    unsafe {
+        st().globals.clear();
+        st().globals.resize(n, NULL);
+    }
+}
+
+pub fn global_set(i: usize, v: V) {
+    let _g = lock();
+    unsafe { global_set_locked(i, v) }
+}
+
+/// Lock must already be held.
+#[allow(static_mut_refs)]
+pub unsafe fn global_set_locked(i: usize, v: V) {
+    retain_locked(v);
+    let old = st().globals[i];
+    st().globals[i] = v;
+    release_locked(old);
+}
+
+/// Read a global. The returned value is "used": its refcount is bumped and
+/// the current arena owns the bump, so the value stays alive even if the
+/// global is reassigned later in the same statement.
+pub fn global_get(i: usize) -> V {
+    let _g = lock();
+    unsafe { use_locked(st().globals[i]) }
+}
+
+/// Take a temporary reference to `v` valid until the next arena rewind.
+/// Retains `v` and gives the arena the retain.
+#[allow(static_mut_refs)]
+pub unsafe fn use_locked(v: V) -> V {
+    if is_ptr(v) {
+        retain_locked(v);
+        st().arenas.last_mut().unwrap().push(v);
+    }
+    v
+}
+
+/// Safe wrapper for front-ends (interpreter identifier loads, codegen).
+pub fn use_var(v: V) -> V {
+    let _g = lock();
+    unsafe { use_locked(v) }
+}
+
+/// Variable store: retains the new value, releases the old one, returns new.
+pub fn swap_var(old: V, new: V) -> V {
+    let _g = lock();
+    unsafe {
+        retain_locked(new);
+        release_locked(old);
+    }
+    new
+}
+
+/// Plain retain without arena ownership — used by front-ends to keep a
+/// value alive across an arena rewind (e.g. return values).
+pub fn retain_plain(v: V) -> V {
+    let _g = lock();
+    unsafe { retain_locked(v) }
+    v
+}
+
+/// Plain release without arena ownership.
+pub fn release_plain(v: V) {
+    let _g = lock();
+    unsafe { release_locked(v) }
+}
+
+pub fn globals_count() -> usize {
+    let _g = lock();
+    unsafe { st().globals.len() }
+}
+
+/// Same, with the runtime lock already held by the caller.
+#[allow(static_mut_refs)]
+pub unsafe fn globals_count_locked() -> usize {
+    st().globals.len()
+}
+
+// ---------------------------------------------------------------------------
+// errors / trace (thread-local)
+// ---------------------------------------------------------------------------
+
+thread_local! {
+    static LAST_ERROR: RefCell<Option<String>> = const { RefCell::new(None) };
+    static TRACE: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+}
+
+pub fn set_error(msg: String) {
+    LAST_ERROR.with(|e| *e.borrow_mut() = Some(msg));
+}
+
+pub fn err_flag() -> bool {
+    LAST_ERROR.with(|e| e.borrow().is_some())
+}
+
+pub fn take_error() -> Option<String> {
+    LAST_ERROR.with(|e| e.borrow_mut().take())
+}
+
+pub fn trace_push(name: &str) {
+    TRACE.with(|t| {
+        let mut t = t.borrow_mut();
+        if t.len() < 512 {
+            t.push(name.to_string());
+        }
+    })
+}
+
+pub fn trace_pop() {
+    TRACE.with(|t| {
+        t.borrow_mut().pop();
+    })
+}
+
+pub fn trace_snapshot() -> Vec<String> {
+    TRACE.with(|t| t.borrow().clone())
+}
+
+pub fn trace_clear() {
+    TRACE.with(|t| t.borrow_mut().clear());
+}
+
+pub fn print_error_and_clear() {
+    if let Some(msg) = take_error() {
+        eprintln!("RuntimeError: {}", msg);
+        let tr = trace_snapshot();
+        if !tr.is_empty() {
+            eprintln!("trace (most recent call last):");
+            for f in tr.iter().rev() {
+                eprintln!("  in {}", f);
+            }
+        }
+        trace_clear();
+    }
+}
+
+// ===========================================================================
+// extern "C" surface used by Cranelift-compiled code
+// ===========================================================================
+
+unsafe fn cstr<'a>(p: *const c_char, len: i64) -> &'a str {
+    if p.is_null() || len <= 0 {
+        return "";
+    }
+    let s = std::slice::from_raw_parts(p as *const u8, len as usize);
+    std::str::from_utf8(s).unwrap_or("")
+}
+
+#[no_mangle]
+pub extern "C" fn plix_rt_init(nglobals: i64) {
+    crate::builtins::install_builtins_lazy();
+    if nglobals > 0 {
+        globals_resize(nglobals as usize);
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn plix_rt_shutdown() {
+    print_error_and_clear();
+}
+
+#[no_mangle]
+pub extern "C" fn plix_int(i: i64) -> V {
+    mk_int(i)
+}
+
+#[no_mangle]
+pub extern "C" fn plix_float_bits(bits: u64) -> V {
+    mk_float_unchecked(f64::from_bits(bits))
+}
+
+#[no_mangle]
+pub extern "C" fn plix_bool(b: i8) -> V {
+    bool_of(b != 0)
+}
+
+#[no_mangle]
+pub extern "C" fn plix_null() -> V {
+    NULL
+}
+
+#[no_mangle]
+pub extern "C" fn plix_retain(v: V) -> V {
+    let _g = lock();
+    unsafe { retain_locked(v) };
+    v
+}
+
+#[no_mangle]
+pub extern "C" fn plix_release(v: V) {
+    let _g = lock();
+    unsafe { release_locked(v) }
+}
+
+#[no_mangle]
+pub extern "C" fn plix_err_flag() -> i64 {
+    if err_flag() {
+        1
+    } else {
+        0
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn plix_set_error(p: *const c_char, len: i64) {
+    set_error(unsafe { cstr(p, len) }.to_string());
+}
+
+#[no_mangle]
+pub extern "C" fn plix_print_error() {
+    print_error_and_clear();
+}
+
+#[no_mangle]
+pub extern "C" fn plix_trace_push(p: *const c_char, len: i64) {
+    trace_push(unsafe { cstr(p, len) });
+}
+
+#[no_mangle]
+pub extern "C" fn plix_trace_pop() {
+    trace_pop();
+}
+
+#[no_mangle]
+pub extern "C" fn plix_frame_push() {
+    frame_push();
+}
+
+#[no_mangle]
+pub extern "C" fn plix_frame_pop(ret: V) -> V {
+    frame_pop_return(ret);
+    ret
+}
+
+#[no_mangle]
+pub extern "C" fn plix_arena_checkpoint() -> i64 {
+    arena_checkpoint() as i64
+}
+
+#[no_mangle]
+pub extern "C" fn plix_arena_rewind(cp: i64) {
+    arena_rewind(cp as usize);
+}
+
+#[no_mangle]
+pub extern "C" fn plix_global_set(i: i64, v: V) {
+    global_set(i as usize, v);
+}
+
+#[no_mangle]
+pub extern "C" fn plix_global_get(i: i64) -> V {
+    global_get(i as usize)
+}
+
+#[no_mangle]
+pub extern "C" fn plix_cell_new(v: V) -> V {
+    mk_cell(v)
+}
+
+#[no_mangle]
+pub extern "C" fn plix_cell_get(cell: V) -> V {
+    let _g = lock();
+    unsafe {
+        match payload(cell) {
+            HeapObj::Cell(v) => use_locked(*v),
+            _ => NULL,
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn plix_var_use(v: V) -> V {
+    use_var(v)
+}
+
+#[no_mangle]
+pub extern "C" fn plix_cell_set(cell: V, v: V) {
+    let _g = lock();
+    unsafe {
+        retain_locked(v);
+        let old = match payload(cell) {
+            HeapObj::Cell(x) => *x,
+            _ => NULL,
+        };
+        if let HeapObj::Cell(x) = &mut *payload_mut(cell) {
+            *x = v;
+        }
+        release_locked(old);
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn plix_str_new(p: *const c_char, len: i64) -> V {
+    mk_str_from(unsafe { cstr(p, len) })
+}
+
+// ---------------------------------------------------------------------------
+// struct support (v0.3 OOP) — used by compiled code and the interpreter
+// ---------------------------------------------------------------------------
+
+pub fn structdef_new(name: String) -> V {
+    mk_structdef(StructInfo {
+        name,
+        fields: Vec::new(),
+        index: HashMap::new(),
+        methods: HashMap::new(),
+        traits: HashMap::new(),
+    })
+}
+
+/// Add a field to a struct under construction.
+pub fn structdef_add_field(def: V, name: &str, ty: &str, default: V, has_default: bool) {
+    let _g = lock();
+    unsafe {
+        if let HeapObj::StructDef(info) = &mut *payload_mut(def) {
+            if !info.index.contains_key(name) {
+                let i = info.fields.len();
+                retain_locked(default);
+                info.fields.push(FieldInfo {
+                    name: name.to_string(),
+                    ty: ty.to_string(),
+                    default,
+                    has_default,
+                });
+                info.index.insert(name.to_string(), i);
+            }
+        }
+    }
+}
+
+/// Add an inherent or trait method (fn value retained by the struct def).
+pub fn structdef_add_method(def: V, trait_name: Option<&str>, name: &str, fv: V) {
+    let _g = lock();
+    unsafe {
+        retain_locked(fv);
+        if let HeapObj::StructDef(info) = &mut *payload_mut(def) {
+            match trait_name {
+                None => {
+                    info.methods.insert(name.to_string(), fv);
+                }
+                Some(t) => {
+                    info.traits
+                        .entry(t.to_string())
+                        .or_default()
+                        .insert(name.to_string(), fv);
+                }
+            }
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn plix_struct_new(p: *const c_char, len: i64) -> V {
+    structdef_new(unsafe { cstr(p, len) }.to_string())
+}
+
+#[no_mangle]
+pub extern "C" fn plix_struct_field(
+    def: V,
+    kp: *const c_char,
+    kl: i64,
+    tp: *const c_char,
+    tl: i64,
+    default: V,
+    has_default: i64,
+) -> V {
+    if crate::heap::err_flag() {
+        return 0;
+    }
+    let name = unsafe { cstr(kp, kl) }.to_string();
+    let ty = unsafe { cstr(tp, tl) }.to_string();
+    structdef_add_field(def, &name, &ty, default, has_default != 0);
+    def
+}
+
+#[no_mangle]
+pub extern "C" fn plix_struct_method(
+    def: V,
+    kp: *const c_char,
+    kl: i64,
+    fv: V,
+    tp: *const c_char,
+    tl: i64,
+) -> V {
+    if crate::heap::err_flag() {
+        return 0;
+    }
+    let name = unsafe { cstr(kp, kl) }.to_string();
+    let tname = unsafe { cstr(tp, tl) };
+    let trait_name = if tname.is_empty() { None } else { Some(tname) };
+    structdef_add_method(def, trait_name, &name, fv);
+    def
+}
+
+/// Build an instance from a packed C-string of '\0'-separated field names
+/// plus a parallel values array.
+#[no_mangle]
+pub extern "C" fn plix_instance_new(
+    def: V,
+    names: *const c_char,
+    nlen: i64,
+    vals: *const V,
+    n: i64,
+) -> V {
+    if crate::heap::err_flag() {
+        return 0;
+    }
+    let raw = if names.is_null() || nlen <= 0 {
+        String::new()
+    } else {
+        let s = unsafe { std::slice::from_raw_parts(names as *const u8, nlen as usize) };
+        String::from_utf8_lossy(s).into_owned()
+    };
+    let keys: Vec<String> = if raw.is_empty() {
+        Vec::new()
+    } else {
+        raw.split('\0').map(|s| s.to_string()).collect()
+    };
+    let valvs: Vec<V> = if n > 0 && !vals.is_null() {
+        unsafe { std::slice::from_raw_parts(vals, n as usize).to_vec() }
+    } else {
+        Vec::new()
+    };
+    let mut pairs: Vec<(String, V)> = Vec::new();
+    for (i, k) in keys.into_iter().enumerate() {
+        let v = *valvs.get(i).unwrap_or(&NULL);
+        pairs.push((k, v));
+    }
+    match crate::value::instantiate(def, pairs) {
+        Ok(x) => x,
+        Err(e) => {
+            crate::heap::set_error(e);
+            0
+        }
+    }
+}
+
+/// Unbox helpers for typed native functions (external F64 ABIs).
+#[no_mangle]
+pub extern "C" fn plix_unbox_f64(v: V) -> f64 {
+    as_float(v)
+}
+
+#[no_mangle]
+pub extern "C" fn plix_box_f64(f: f64) -> V {
+    if crate::heap::err_flag() {
+        return 0;
+    }
+    mk_float_unchecked(f)
+}
+
+/// f64 of any numeric (int widened); errors on non-numeric.
+#[no_mangle]
+pub extern "C" fn plix_as_f64(v: V) -> f64 {
+    if is_int(v) {
+        return as_int(v) as f64;
+    }
+    unsafe {
+        if let HeapObj::Float(f) = payload_opt_pub(v).unwrap_or(&HeapObj::Float(0.0)) {
+            return *f;
+        }
+    }
+    crate::heap::set_error(format!(
+        "expected float-compatible numeric, got {}",
+        type_name(v)
+    ));
+    0.0
+}

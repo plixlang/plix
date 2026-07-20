@@ -1,0 +1,52 @@
+// stdlib tour: fs (files), sys (system), forge (Rust bridge metadata).
+import "fs";
+import "sys";
+import "forge";
+
+// ---- sys ----
+auto a = sys.args();
+auto argc = len(a);
+say("argv[0] = ${a[0]}  (argc=${argc})");
+auto plat = sys.platform();
+auto arch = sys.arch();
+say("platform = ${plat}, arch = ${arch}");
+say("cwd = ${sys.cwd()}");
+auto pid = sys.pid();
+auto host = sys.hostname();
+say("pid = ${pid}, host = ${host}");
+sys.set_env("PLIX_DEMO", "1");
+say("PLIX_DEMO=${sys.env(\"PLIX_DEMO\")}");
+
+// ---- fs ----
+auto dir = "/tmp/plix_demo";
+if (!fs.exists(dir)) {
+    fs.mkdir(dir);
+}
+auto file = fs.join(dir, "notes.txt");
+fs.write(file, "line one\nline two\n");
+fs.append(file, "line three\n");
+auto text = fs.read(file);
+say("read:\n${text}");
+auto sz = fs.size(file);
+auto nm = fs.name(file);
+auto ex = fs.ext(file);
+say("size=${sz} bytes, name=${nm}, ext=${ex}");
+for (line in split(text, "\n")) {
+    say("  | ${line}");
+}
+for (entry in fs.list(dir)) {
+    auto p = fs.join(dir, entry);
+    auto isf = fs.is_file(p);
+    say("dir entry: ${entry}  (file? ${isf})");
+}
+auto copy = fs.join(dir, "notes_copy.txt");
+fs.copy(file, copy);
+auto e1 = fs.exists(copy);
+say("copy exists? ${e1}");
+fs.remove(copy);
+auto e2 = fs.exists(copy);
+say("after remove: ${e2}");
+
+// ---- forge (Rust ecosystem bridge info) ----
+say("plix = ${forge.version()}, rustc = ${forge.rust_version()}");
+say("host target = ${forge.target()}");

@@ -1,0 +1,62 @@
+// negative test: every error below must be caught by `plix check` (and by
+// both run and build). Each block is annotated with the expected E-code.
+
+struct Point { x: float, y: float }
+
+impl Point {
+    func move_by(&mut self, dx: float) {
+        self.x = self.x + dx;
+    }
+}
+
+trait Sized2 {
+    func size(&self) -> int;
+}
+
+// E0046: missing required trait method
+struct Box2 { w: int }
+impl Sized2 for Box2 { }
+
+func area_of(s: Sized2) -> int { return s.size(); }
+
+func add(a: int, b: int) -> int { return a + b; }
+
+func main() {
+    // E0308: argument type mismatch
+    auto r1 = add("hello", 2);
+
+    // E0061: wrong arity
+    auto r2 = add(1, 2, 3);
+
+    // E0063: missing field
+    auto p1 = Point { x: 1.0 };
+
+    // E0609: unknown field
+    auto p2 = Point { x: 1.0, y: 2.0, z: 3.0 };
+
+    // E0308: return type mismatch
+    auto p3 = Point { x: 1.0, y: 2.0 };
+
+    // E0594: &mut self method on a const
+    const cp = Point { x: 0.0, y: 0.0 };
+    cp.move_by(1.0);
+
+    // E0277: struct does not implement the required trait
+    auto not_sized = Point { x: 0.0, y: 0.0 };
+    auto s = area_of(not_sized);
+
+    // E0308: annotated variable mismatch
+    auto n: int = "no";
+
+    // E0308: int slot cannot receive a float division result
+    auto d: int = 10 / 3;
+
+    say("${r1}${r2}${p1}${p2}${p3}${s}${n}${d}");
+}
+
+func bad_return() -> int {
+    // E0308: return value of bad_return
+    return "nope";
+}
+
+main();

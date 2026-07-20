@@ -1,0 +1,31 @@
+// a tiny HTTP server:  plix run examples/http_server.px
+// then:  curl http://127.0.0.1:8080/
+//        curl "http://127.0.0.1:8080/echo?x=42"
+import "net";
+
+auto hits = 0;
+
+func app(req) {
+    hits += 1;
+    if (req.path == "/") {
+        return net.response(
+            200,
+            "<h1>Hello from Plix!</h1><p>hits: ${hits}</p>",
+            "text/html; charset=utf-8"
+        );
+    }
+    if (req.path == "/echo") {
+        auto q = "(empty)";
+        if (contains(req.target, "?")) {
+            q = req.target[find(req.target, "?") + 1..];
+        }
+        return "you sent: ${q}   (query map: ${req.query})";
+    }
+    if (req.path == "/json") {
+        return net.response(200, "{\"ok\":true,\"lang\":\"plix\"}", "application/json");
+    }
+    return net.response(404, "not found: ${req.path}\n");
+}
+
+say("listening on http://127.0.0.1:8080 (ctrl-c to stop)");
+net.serve("127.0.0.1:8080", app);

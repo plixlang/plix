@@ -1,0 +1,78 @@
+// plix test suite: core language semantics (runs via `plix test`)
+// every `func test_*` below is invoked independently.
+
+func test_arithmetic() {
+    assert_eq(2 + 3 * 4, 14);
+    assert_eq(7 / 2, 3.5);
+    assert_eq(idiv(7, 2), 3);
+    assert_eq(7 % 3, 1);
+    assert_eq(1 << 4, 16);
+    assert_ne(0.1 + 0.2, 0.3); // floats are floats
+}
+
+func test_strings() {
+    auto s = "hello " + "plix";
+    assert_eq(len(s), 10);
+    assert_eq(upper("ab"), "AB");
+    assert_eq(trim("  x  "), "x");
+    auto who = "world";
+    assert_eq("hi ${who}", "hi world");
+}
+
+func test_collections() {
+    auto xs = [3, 1, 2];
+    assert_eq(len(xs), 3);
+    auto total: int = 0;
+    for (v in xs) { total += v; }
+    assert_eq(total, 6);
+    push(xs, 4);
+    assert_eq(xs[-1], 4);
+    auto m = { "b": 2, "a": 1 };
+    assert_eq(m["a"] + m["b"], 3);
+    assert(keys(m), "object keys ok");
+}
+
+func test_closures_and_match() {
+    auto add = func(a, b) { return a + b; };
+    assert_eq(add(20, 22), 42);
+    auto doubled = map([1, 2, 3], func(x) { return x * 2; });
+    assert_eq(doubled, [2, 4, 6]);
+    auto label = match 7 {
+        7 => "seven",
+        _ => "other",
+    };
+    assert_eq(label, "seven");
+}
+
+struct Acc { total: int }
+
+impl Acc {
+    func new() -> Acc { return Acc { total: 0 }; }
+    func add(&mut self, n: int) { self.total = self.total + n; }
+    func value(&self) -> int { return self.total; }
+}
+
+func test_oop_and_typing() {
+    auto a = Acc.new();
+    a.add(3);
+    a.add(4);
+    assert_eq(a.value(), 7);
+
+    auto n: int = 6 * 7;
+    auto f: float = n;
+    assert_eq(f, 42.0);
+
+    for (v: int in [1, 2, 3]) {
+        n += v;
+    }
+    assert_eq(n, 48);
+}
+
+func fib(n: int) -> int {
+    if (n <= 1) { return n; }
+    return fib(n - 1) + fib(n - 2);
+}
+
+func test_fib10() {
+    assert_eq(fib(10), 55);
+}

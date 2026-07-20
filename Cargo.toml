@@ -1,0 +1,25 @@
+[package]
+name = "plix"
+version = "0.3.0"
+edition = "2024"
+description = "The Plix programming language: interpreter + native (Cranelift) compiler, dual memory management, Python FFI."
+build = "build.rs"
+
+[workspace]
+members = ["rt"]
+
+[dependencies]
+# all ISAs Plix supports natively: x86_64 (Linux/Windows/macOS) and
+# aarch64 (Apple Silicon, aarch64 Linux)
+cranelift-codegen = { version = "0.122", default-features = false, features = ["std", "x86", "arm64"] }
+cranelift-frontend = "0.122"
+cranelift-object = "0.122"
+cranelift-module = "0.122"
+cranelift-native = "0.122"
+plixrt = { path = "rt" }
+
+[profile.release]
+opt-level = 2
+lto = "thin"
+strip = true
+

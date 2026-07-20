@@ -1,0 +1,11 @@
+auto a = [];
+auto i = 0;
+while (i < 1000000) {
+    push(a, i);
+    i = i + 1;
+}
+auto total = 0;
+for (x in a) {
+    total = total + x;
+}
+say("${total}");

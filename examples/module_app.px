@@ -1,0 +1,11 @@
+// importing a user .px module
+import "mathlib.px" as ml;
+
+say("golden = ${ml.GOLDEN}");
+say("square(7) = ${ml.square(7)}");
+say("cube(3) = ${ml.cube(3)}");
+say("sumlist([1,2,3,4]) = ${ml.sumlist([1, 2, 3, 4])}");
+
+// module functions are first-class values
+auto f = ml.square;
+say("via ref: ${f(9)}");

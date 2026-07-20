@@ -1,0 +1,47 @@
+// ownership (`own`) — Rust-style, checked statically, zero runtime cost.
+//
+// In Plix, moves are always explicit: `own y = x` or `return x`.
+// Everything else borrows: printing, calling, reading — never consumes.
+
+own name = "plix";
+say("hello ${name}");              // borrow: printing never consumes
+say("still here: ${name}");
+
+func shout(s) {
+    // parameters are borrows; callers always keep their bindings
+    say("!! ${s} !!");
+}
+
+shout(name);                       // borrow
+say("name survived the call: ${name}");
+
+// explicit MOVE: ownership of the string transfers to `award`
+own award = name;
+say("moved: ${award}");
+// say(name);                      // would be E0382: use of moved value
+
+// iterating an own container consumes it — borrow with & to keep it:
+own xs = [3, 5, 7];
+auto total = 0;
+for (x in &xs) {
+    total += x;
+}
+auto n = len(xs);
+say("sum=${total} of ${n} items (xs still owned here)");
+
+// mutable writes under own are checked but cheap
+own acc = 100;
+for (auto i = 1; i <= 4; i = i + 1) {
+    acc = acc + i;
+}
+say("acc = ${acc}");
+
+// owned values can be returned (the return itself is the move)
+func make_greeting() {
+    own g = { text: "salam", times: 2 };
+    return g;
+}
+own got = make_greeting();
+say("got: ${got.text} x ${got.times}");
+
+say("ownership demo: all good");

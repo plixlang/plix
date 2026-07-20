@@ -1,0 +1,106 @@
+// Plix OOP showcase (v0.3): struct + impl + trait, Rust-model semantics
+// expressed in Plix syntax. Runs identically under `plix run` and
+// `plix build`.
+
+struct Point {
+    x: float,
+    y: float,
+    label: str = "point",   // field default (evaluated once at declaration)
+}
+
+impl Point {
+    // associated function — the Plix constructor convention
+    func new(x: float, y: float) -> Point {
+        return Point { x: x, y: y };
+    }
+
+    func origin() -> Point {
+        return Point { x: 0.0, y: 0.0, label: "O" };
+    }
+
+    // &self receiver: read-only method
+    func dist(&self, other: Point) -> float {
+        auto dx = self.x - other.x;
+        auto dy = self.y - other.y;
+        return sqrt(dx * dx + dy * dy);
+    }
+
+    // &mut self receiver: mutating method
+    func scale(&mut self, f: float) {
+        self.x = self.x * f;
+        self.y = self.y * f;
+    }
+
+    func describe(&self) -> str {
+        return "${self.label}(${self.x}, ${self.y})";
+    }
+}
+
+trait Shape {
+    func area(&self) -> float;          // required
+    func kind(&self) -> str {           // default implementation
+        return "shape";
+    }
+}
+
+struct Circle {
+    r: float,
+}
+
+impl Shape for Point {
+    func area(&self) -> float {
+        return 0.0;
+    }
+    func kind(&self) -> str {
+        return "point";
+    }
+}
+
+// `kind` is not overridden on Circle: the trait default is used
+impl Shape for Circle {
+    func area(&self) -> float {
+        return 3.141592653589793 * self.r * self.r;
+    }
+}
+
+// trait-typed parameter: any struct implementing Shape
+func report(s: Shape) {
+    say("${s.kind()} area=${s.area()}");
+}
+
+func main() {
+    auto p = Point.new(3.0, 4.0);
+    auto q = Point { x: 6.0, y: 8.0 };            // struct literal
+    auto o = Point.origin();                       // associated fn, shorthand default label
+
+    say(p.describe());
+    say("dist(p,q) = ${p.dist(q)}");
+
+    p.scale(2.0);
+    say("scaled: ${p.describe()}");
+
+    say("origin  = ${o.describe()}");
+    say("q       = ${q.describe()} (label default)");
+
+    report(p);                                     // Shape via impl
+    report(Circle { r: 2.0 });                     // Shape via impl + default kind()
+
+    // trait method value + structural equality + repr
+    auto shapes = [Circle { r: 1.0 }, Circle { r: 3.0 }];
+    auto total = 0.0;
+    for (s in shapes) {
+        total += s.area();
+    }
+    say("total area = ${total}");
+
+    auto a = Point { x: 1.0, y: 2.0 };
+    auto b = Point { x: 1.0, y: 2.0 };
+    say("structural eq: ${a == b}");
+    say("repr: ${a}");
+
+    // method value as a first-class function
+    auto d = p.describe;
+    say("first-class method: ${d()}");
+}
+
+main();

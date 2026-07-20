@@ -1,0 +1,10 @@
+[package]
+name = "plixrt"
+version = "0.3.0"
+edition = "2021"
+description = "Plix runtime library: tagged values, heap, operations, stdlib, Python FFI. Linked into the plix toolchain and into every compiled Plix program."
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
