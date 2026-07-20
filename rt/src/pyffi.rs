@@ -75,13 +75,43 @@ struct Py {
 unsafe impl Send for Py {}
 unsafe impl Sync for Py {}
 
+#[cfg(unix)]
 extern "C" {
     fn dlopen(filename: *const c_char, flags: i32) -> Ptr;
     fn dlsym(handle: Ptr, symbol: *const c_char) -> Ptr;
 }
 
+#[cfg(unix)]
 const RTLD_NOW: i32 = 2;
+#[cfg(unix)]
 const RTLD_GLOBAL: i32 = 0x100;
+
+#[cfg(unix)]
+unsafe fn open_library(filename: *const c_char) -> Ptr {
+    dlopen(filename, RTLD_NOW | RTLD_GLOBAL)
+}
+
+#[cfg(unix)]
+unsafe fn get_symbol(handle: Ptr, symbol: *const c_char) -> Ptr {
+    dlsym(handle, symbol)
+}
+
+#[cfg(windows)]
+#[link(name = "kernel32")]
+extern "system" {
+    fn LoadLibraryA(lp_lib_file_name: *const c_char) -> Ptr;
+    fn GetProcAddress(h_module: Ptr, lp_proc_name: *const c_char) -> Ptr;
+}
+
+#[cfg(windows)]
+unsafe fn open_library(filename: *const c_char) -> Ptr {
+    LoadLibraryA(filename)
+}
+
+#[cfg(windows)]
+unsafe fn get_symbol(handle: Ptr, symbol: *const c_char) -> Ptr {
+    GetProcAddress(handle, symbol)
+}
 
 static PY: std::sync::OnceLock<Option<Py>> = std::sync::OnceLock::new();
 static INIT: std::sync::Once = std::sync::Once::new();
@@ -91,22 +121,52 @@ fn candidates() -> Vec<String> {
     if let Ok(p) = std::env::var("PLIX_PYTHON_LIB") {
         v.push(p);
     }
-    for ver in ["3.13", "3.12", "3.11", "3.10", "3.9", "3.8"] {
-        v.push(format!("libpython{}.so.1.0", ver));
-        v.push(format!("libpython{}.so", ver));
-        v.push(format!("/usr/local/lib/libpython{}.so.1.0", ver));
-        v.push(format!("/usr/local/lib/libpython{}.so", ver));
-        v.push(format!("/usr/lib/libpython{}.so.1.0", ver));
-        v.push(format!("/usr/lib/x86_64-linux-gnu/libpython{}.so.1.0", ver));
+
+    #[cfg(windows)]
+    {
+        // LoadLibraryA searches the application directory, System32, the
+        // current directory and PATH. Users can still override with
+        // PLIX_PYTHON_LIB=C:\\path\\to\\python313.dll.
+        for ver in ["313", "312", "311", "310", "39", "38"] {
+            v.push(format!("python{}.dll", ver));
+        }
+        v.push("python3.dll".into());
     }
-    v.push("libpython3.so".into());
+
+    #[cfg(target_os = "macos")]
+    {
+        for ver in ["3.13", "3.12", "3.11", "3.10", "3.9", "3.8"] {
+            v.push(format!("libpython{}.dylib", ver));
+            v.push(format!("/usr/local/lib/libpython{}.dylib", ver));
+            v.push(format!("/opt/homebrew/lib/libpython{}.dylib", ver));
+            v.push(format!(
+                "/Library/Frameworks/Python.framework/Versions/{}/Python",
+                ver
+            ));
+        }
+        v.push("libpython3.dylib".into());
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        for ver in ["3.13", "3.12", "3.11", "3.10", "3.9", "3.8"] {
+            v.push(format!("libpython{}.so.1.0", ver));
+            v.push(format!("libpython{}.so", ver));
+            v.push(format!("/usr/local/lib/libpython{}.so.1.0", ver));
+            v.push(format!("/usr/local/lib/libpython{}.so", ver));
+            v.push(format!("/usr/lib/libpython{}.so.1.0", ver));
+            v.push(format!("/usr/lib/x86_64-linux-gnu/libpython{}.so.1.0", ver));
+        }
+        v.push("libpython3.so".into());
+    }
+
     v
 }
 
 macro_rules! sym {
     ($h:expr, $name:literal) => {{
         let c = CString::new($name).unwrap();
-        let p = unsafe { dlsym($h, c.as_ptr()) };
+        let p = unsafe { get_symbol($h, c.as_ptr()) };
         if p.is_null() {
             return None;
         }
@@ -114,7 +174,7 @@ macro_rules! sym {
     }};
     ($h:expr, $name:literal, data) => {{
         let c = CString::new($name).unwrap();
-        let p = unsafe { dlsym($h, c.as_ptr()) };
+        let p = unsafe { get_symbol($h, c.as_ptr()) };
         if p.is_null() {
             return None;
         }
@@ -128,7 +188,7 @@ fn load() -> Option<Py> {
             Ok(c) => c,
             Err(_) => continue,
         };
-        let h = unsafe { dlopen(c.as_ptr(), RTLD_NOW | RTLD_GLOBAL) };
+        let h = unsafe { open_library(c.as_ptr()) };
         if h.is_null() {
             continue;
         }
