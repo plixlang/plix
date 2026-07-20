@@ -1331,6 +1331,18 @@ fn fs_ext(_c: &mut dyn Caller, args: &[V]) -> OpResult {
     ))
 }
 
+fn shell_command(cmd: &str) -> std::process::Command {
+    if cfg!(windows) {
+        let mut c = std::process::Command::new("cmd");
+        c.arg("/C").arg(cmd);
+        c
+    } else {
+        let mut c = std::process::Command::new("sh");
+        c.arg("-c").arg(cmd);
+        c
+    }
+}
+
 // ---------------------------------------------------------------------------
 // sys module
 // ---------------------------------------------------------------------------
@@ -1379,10 +1391,7 @@ fn sys_exec(_c: &mut dyn Caller, args: &[V]) -> OpResult {
     need(args, 1, "sys.exec")?;
     let out = if is_int(args[0]) || !is_ptr(args[0]) {
         let cmd = to_display(args[0]);
-        std::process::Command::new("sh")
-            .arg("-c")
-            .arg(&cmd)
-            .output()
+        shell_command(&cmd).output()
     } else {
         unsafe {
             match payload(args[0]) {
@@ -1397,10 +1406,7 @@ fn sys_exec(_c: &mut dyn Caller, args: &[V]) -> OpResult {
                 }
                 _ => {
                     let cmd = to_display(args[0]);
-                    std::process::Command::new("sh")
-                        .arg("-c")
-                        .arg(&cmd)
-                        .output()
+                    shell_command(&cmd).output()
                 }
             }
         }

@@ -73,12 +73,14 @@ discovery, Windows notes): [docs/install.md](docs/install.md).
 ## Usage
 
 ```
-plix run    file.px [args...]   interpret (fast startup)
-plix build  file.px -o app      native standalone executable
-plix exec   file.px [args...]   compile+run natively (like `go run`)
-plix check  file.px             parse + ownership checking only
-plix test   [paths...]          run *_test.px suites (default: ./tests)
-plix repl                       interactive shell
+plix run    [file.px] [args...]   interpret (uses plix.toml when omitted)
+plix build  [file.px] -o app      native standalone executable
+plix exec   [file.px] [args...]   compile+run natively (like `go run`)
+plix check  file.px               parse + type + ownership checking
+plix test   [opts] [paths...]     run *_test.px suites (--filter/--json)
+plix fmt    [--check] [paths...]  format .px source files
+plix lint   [paths...]            lint .px source files
+plix repl                         interactive shell
 ```
 
 ## The language in 30 seconds
@@ -153,8 +155,8 @@ rt/         plixrt: tagged values, ARC+arenas, ops, structs/instances,
             stdlib, HTTP, Python FFI
             (linked into the toolchain AND into every compiled program)
 examples/   runnable demos
-docs/       grammar.md · typing.md · oop.md · memory.md · ffi-python.md · stdlib.md
-            comparison.md (measured benchmarks vs C/Rust/Java/Node/Python)
+docs/       grammar.md · typing.md · tooling.md · oop.md · memory.md · ffi-python.md
+            stdlib.md · comparison.md (measured benchmarks vs C/Rust/Java/Node/Python)
 ```
 
 ## خلاصه — فارسی

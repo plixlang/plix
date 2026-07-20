@@ -11,8 +11,11 @@ mod ast;
 mod owncheck;
 // codegen modules (native compiler)
 mod codegen;
+mod fmt;
 mod interp;
 mod lexer;
+mod lint;
+mod manifest;
 mod parser;
 mod resolve;
 mod token;
@@ -22,7 +25,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-const VERSION: &str = "0.4.0";
+const VERSION: &str = "0.5.0";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
@@ -36,6 +39,8 @@ fn main() -> ExitCode {
         "exec" => cmd_run(&args[2..], true),
         "check" => cmd_check(&args[2..]),
         "test" => cmd_test(&args[2..]),
+        "fmt" => cmd_fmt(&args[2..]),
+        "lint" => cmd_lint(&args[2..]),
         "repl" => cmd_repl(),
         "--version" | "-V" | "version" => {
             println!("plix {}", VERSION);
@@ -58,11 +63,13 @@ fn usage() {
         "plix {} — the Plix language
 
 USAGE:
-  plix run    <file.px>           interpret the program (fast startup)
-  plix build  <file.px> -o <out>  compile to a native executable
-  plix exec   <file.px>           compile to memory and run natively
-  plix check  <file.px>           parse + ownership checks (no execution)
-  plix test   [paths...]          run *_test.px suites (default: ./tests)
+  plix run    [file.px] [args...] interpret the program (uses plix.toml if omitted)
+  plix build  [file.px] -o <out>  compile to a native executable
+  plix exec   [file.px] [args...] compile and run natively
+  plix check  <file.px>           parse + type + ownership checks
+  plix test   [opts] [paths...]   run *_test.px suites (--filter, --fail-fast, --json)
+  plix fmt    [--check] [paths...] format .px files
+  plix lint   [paths...]          lint .px files
   plix repl                       interactive shell
   plix --version
 
@@ -75,11 +82,35 @@ ENV:
 fn read_file_arg(args: &[String]) -> Result<(PathBuf, String), String> {
     let file = args
         .first()
-        .ok_or_else(|| "missing input file".to_string())?;
+        .filter(|s| !s.starts_with('-'))
+        .cloned()
+        .or_else(manifest_entry_file)
+        .ok_or_else(|| {
+            "missing input file (pass file.px or add [build].entry to plix.toml)".to_string()
+        })?;
     let path = PathBuf::from(file);
     let src = std::fs::read_to_string(&path)
         .map_err(|e| format!("cannot read {}: {}", path.display(), e))?;
     Ok((path, src))
+}
+
+fn manifest_entry_file() -> Option<String> {
+    let cwd = std::env::current_dir().ok()?;
+    let mp = manifest::Manifest::find_from(&cwd)?;
+    manifest::Manifest::load_from(&mp).ok()?.build_entry
+}
+
+fn manifest_build_out() -> Option<String> {
+    let cwd = std::env::current_dir().ok()?;
+    let mp = manifest::Manifest::find_from(&cwd)?;
+    manifest::Manifest::load_from(&mp).ok()?.build_out
+}
+
+fn manifest_test_paths() -> Option<Vec<String>> {
+    let cwd = std::env::current_dir().ok()?;
+    let mp = manifest::Manifest::find_from(&cwd)?;
+    let paths = manifest::Manifest::load_from(&mp).ok()?.test_paths;
+    if paths.is_empty() { None } else { Some(paths) }
 }
 
 /// recursive `*_test.px` discovery (no external walk crate needed)
@@ -109,15 +140,52 @@ fn collect_test_files(dir: &PathBuf, out: &mut Vec<PathBuf>) {
     }
 }
 
+#[derive(Default)]
+struct TestOpts {
+    filter: Option<String>,
+    fail_fast: bool,
+    json: bool,
+    paths: Vec<String>,
+}
+
+fn parse_test_opts(args: &[String]) -> Result<TestOpts, String> {
+    let mut o = TestOpts::default();
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--filter" => {
+                i += 1;
+                o.filter = Some(args.get(i).ok_or("--filter needs a value")?.clone());
+            }
+            "--fail-fast" => o.fail_fast = true,
+            "--json" => o.json = true,
+            "-v" | "--verbose" => {}
+            x if x.starts_with('-') => return Err(format!("unknown test option {}", x)),
+            x => o.paths.push(x.to_string()),
+        }
+        i += 1;
+    }
+    Ok(o)
+}
+
 fn cmd_test(args: &[String]) -> ExitCode {
-    let roots: Vec<String> = if args.is_empty() {
-        vec![if PathBuf::from("tests").is_dir() {
-            "tests".to_string()
-        } else {
-            ".".to_string()
-        }]
+    let opts = match parse_test_opts(args) {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("error: {}", e);
+            return ExitCode::from(2);
+        }
+    };
+    let roots: Vec<String> = if opts.paths.is_empty() {
+        manifest_test_paths().unwrap_or_else(|| {
+            vec![if PathBuf::from("tests").is_dir() {
+                "tests".to_string()
+            } else {
+                ".".to_string()
+            }]
+        })
     } else {
-        args.to_vec()
+        opts.paths.clone()
     };
     let mut files: Vec<PathBuf> = Vec::new();
     for r in &roots {
@@ -134,19 +202,29 @@ fn cmd_test(args: &[String]) -> ExitCode {
     files.sort();
     files.dedup();
     if files.is_empty() {
-        println!("no *_test.px files found");
+        if opts.json {
+            println!("{{\"total\":0,\"passed\":0,\"failed\":0,\"files\":[]}}");
+        } else {
+            println!("no *_test.px files found");
+        }
         return ExitCode::SUCCESS;
     }
 
     let mut total = 0usize;
     let mut failed = 0usize;
-    for f in &files {
+    let mut json_files: Vec<String> = Vec::new();
+    'files: for f in &files {
         let name = f.display().to_string();
         let src = match std::fs::read_to_string(f) {
             Ok(s) => s,
             Err(e) => {
-                println!("✗ {} (cannot read: {})", name, e);
                 failed += 1;
+                if !opts.json {
+                    println!("✗ {} (cannot read: {})", name, e);
+                }
+                if opts.fail_fast {
+                    break;
+                }
                 continue;
             }
         };
@@ -157,41 +235,106 @@ fn cmd_test(args: &[String]) -> ExitCode {
         let mut it = interp::Interpreter::new(base);
         match interp::run_test_file(&src, &name, &mut it) {
             Err(e) => {
-                println!("✗ {}", name);
-                println!("    {}", e.lines().next().unwrap_or(&e));
                 total += 1;
                 failed += 1;
+                if opts.json {
+                    json_files.push(format!(
+                        "{{\"file\":\"{}\",\"tests\":[{{\"name\":\"<file>\",\"ok\":false,\"message\":\"{}\"}}]}}",
+                        json_escape(&name),
+                        json_escape(&e)
+                    ));
+                } else {
+                    println!("✗ {}", name);
+                    println!("    {}", e.lines().next().unwrap_or(&e));
+                }
             }
             Ok(outcomes) => {
-                let fails: Vec<&interp::TestOutcome> =
-                    outcomes.iter().filter(|o| o.result.is_err()).collect();
-                total += outcomes.len().max(0);
+                let selected: Vec<&interp::TestOutcome> = outcomes
+                    .iter()
+                    .filter(|o| {
+                        opts.filter
+                            .as_ref()
+                            .map(|f| o.name.contains(f))
+                            .unwrap_or(true)
+                    })
+                    .collect();
+                let fails: Vec<&&interp::TestOutcome> =
+                    selected.iter().filter(|o| o.result.is_err()).collect();
+                total += selected.len();
                 failed += fails.len();
-                if fails.is_empty() {
-                    println!("✓ {} ({} tests)", name, outcomes.len());
+                if opts.json {
+                    let tests: Vec<String> = selected
+                        .iter()
+                        .map(|o| match &o.result {
+                            Ok(()) => format!(
+                                "{{\"name\":\"{}\",\"line\":{},\"ok\":true}}",
+                                json_escape(&o.name),
+                                o.line
+                            ),
+                            Err(m) => format!(
+                                "{{\"name\":\"{}\",\"line\":{},\"ok\":false,\"message\":\"{}\"}}",
+                                json_escape(&o.name),
+                                o.line,
+                                json_escape(m)
+                            ),
+                        })
+                        .collect();
+                    json_files.push(format!(
+                        "{{\"file\":\"{}\",\"tests\":[{}]}}",
+                        json_escape(&name),
+                        tests.join(",")
+                    ));
+                } else if fails.is_empty() {
+                    println!("✓ {} ({} tests)", name, selected.len());
                 } else {
-                    println!("✗ {} ({}/{} failed)", name, fails.len(), outcomes.len());
-                    for o in fails {
+                    println!("✗ {} ({}/{} failed)", name, fails.len(), selected.len());
+                    for o in &fails {
                         if let Err(m) = &o.result {
                             println!("    ✗ {} — {}", o.name, m);
                         }
                     }
                 }
+                if opts.fail_fast && !fails.is_empty() {
+                    break 'files;
+                }
             }
         }
     }
-    println!();
-    println!(
-        "{} test(s): {} passed, {} failed",
-        total,
-        total.saturating_sub(failed),
-        failed
-    );
+    if opts.json {
+        println!(
+            "{{\"total\":{},\"passed\":{},\"failed\":{},\"files\":[{}]}}",
+            total,
+            total.saturating_sub(failed),
+            failed,
+            json_files.join(",")
+        );
+    } else {
+        println!();
+        println!(
+            "{} test(s): {} passed, {} failed",
+            total,
+            total.saturating_sub(failed),
+            failed
+        );
+    }
     if failed > 0 {
         ExitCode::FAILURE
     } else {
         ExitCode::SUCCESS
     }
+}
+
+fn json_escape(s: &str) -> String {
+    s.chars()
+        .flat_map(|c| match c {
+            '\\' => "\\\\".chars().collect::<Vec<_>>(),
+            '"' => "\\\"".chars().collect(),
+            '\n' => "\\n".chars().collect(),
+            '\r' => "\\r".chars().collect(),
+            '\t' => "\\t".chars().collect(),
+            x => vec![x],
+        })
+        .collect()
 }
 
 fn cmd_run(args: &[String], native: bool) -> ExitCode {
@@ -240,7 +383,7 @@ fn cmd_build(args: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let mut out = "a.out".to_string();
+    let mut out = manifest_build_out().unwrap_or_else(|| "a.out".to_string());
     let mut i = 1;
     while i < args.len() {
         if (args[i] == "-o" || args[i] == "--output") && i + 1 < args.len() {
@@ -260,6 +403,113 @@ fn cmd_build(args: &[String]) -> ExitCode {
             eprintln!("{}", e);
             ExitCode::FAILURE
         }
+    }
+}
+
+fn cmd_fmt(args: &[String]) -> ExitCode {
+    let mut check = false;
+    let mut paths = Vec::new();
+    for a in args {
+        if a == "--check" {
+            check = true;
+        } else {
+            paths.push(PathBuf::from(a));
+        }
+    }
+    if paths.is_empty() {
+        paths.push(PathBuf::from("."));
+    }
+    let mut files = Vec::new();
+    for p in &paths {
+        fmt::collect_px_files(p, &mut files);
+    }
+    files.sort();
+    files.dedup();
+    let mut failed = false;
+    for f in files {
+        let src = match std::fs::read_to_string(&f) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("fmt: cannot read {}: {}", f.display(), e);
+                failed = true;
+                continue;
+            }
+        };
+        match fmt::format_source(&src) {
+            Ok(r) => {
+                if r.changed {
+                    if check {
+                        println!("would reformat {}", f.display());
+                        failed = true;
+                    } else if let Err(e) = std::fs::write(&f, r.formatted) {
+                        eprintln!("fmt: cannot write {}: {}", f.display(), e);
+                        failed = true;
+                    } else {
+                        println!("formatted {}", f.display());
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("fmt: {}: {}", f.display(), e);
+                failed = true;
+            }
+        }
+    }
+    if failed {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+
+fn cmd_lint(args: &[String]) -> ExitCode {
+    let mut paths: Vec<PathBuf> = args.iter().map(PathBuf::from).collect();
+    if paths.is_empty() {
+        paths.push(PathBuf::from("."));
+    }
+    let mut files = Vec::new();
+    for p in &paths {
+        fmt::collect_px_files(p, &mut files);
+    }
+    files.sort();
+    files.dedup();
+    let mut total = 0usize;
+    let mut failed = false;
+    for f in files {
+        let name = f.display().to_string();
+        let src = match std::fs::read_to_string(&f) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("lint: cannot read {}: {}", name, e);
+                failed = true;
+                continue;
+            }
+        };
+        match lint::lint_source(&src, &name) {
+            Ok(ws) => {
+                for w in ws {
+                    println!(
+                        "warning[{}]: {}\n  --> {}:{}:{}",
+                        w.code, w.msg, name, w.line, w.col
+                    );
+                    total += 1;
+                }
+            }
+            Err(e) => {
+                eprint!("{}", e);
+                failed = true;
+            }
+        }
+    }
+    if total == 0 && !failed {
+        println!("✓ no lint warnings");
+    } else if total > 0 {
+        println!("{} warning(s)", total);
+    }
+    if failed {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
     }
 }
 
