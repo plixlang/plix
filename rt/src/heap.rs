@@ -505,6 +505,34 @@ pub fn type_name(v: V) -> String {
     kind_name(v).to_string()
 }
 
+/// Canonical runtime message for an `int` typed-boundary guard.
+///
+/// This helper is shared by the interpreter and the native backend so both
+/// execution modes produce byte-identical error text.
+pub fn guard_msg_int(what: &str) -> String {
+    format!("type guard: expected int for {}, found non-int", what)
+}
+
+/// Convert a value to f64 for a typed `float` boundary.
+///
+/// `int` values widen to float; existing float values pass through; every
+/// other value is rejected with the same message used by the native runtime
+/// helper `plix_as_f64`.
+pub fn as_f64_checked(v: V) -> Result<f64, String> {
+    if is_int(v) {
+        return Ok(as_int(v) as f64);
+    }
+    unsafe {
+        match payload_opt_pub(v) {
+            Some(HeapObj::Float(f)) => Ok(*f),
+            _ => Err(format!(
+                "expected float-compatible numeric, got {}",
+                type_name(v)
+            )),
+        }
+    }
+}
+
 /// If `v` is an instance, the name of its struct.
 pub unsafe fn struct_name_of(v: V) -> Option<String> {
     if let HeapObj::Instance { def, .. } = payload_opt_pub(v)? {
