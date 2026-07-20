@@ -1,0 +1,167 @@
+name: CI / Build / Release
+
+on:
+  push:
+    branches:
+      - "**"
+    tags:
+      - "v*"
+  pull_request:
+    branches:
+      - "**"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test (Ubuntu)
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build debug workspace
+        run: cargo build --workspace --locked
+
+      - name: Run Rust tests
+        run: cargo test --workspace --locked
+
+      - name: Run Plix dual-mode verification battery
+        run: bash tests/run_all.sh ./target/debug/plix
+
+      - name: Run deterministic interpreter/native fuzz parity
+        run: bash tests/fuzz_parity.sh 40 ./target/debug/plix
+
+  package:
+    name: Package ${{ matrix.name }}
+    needs: test
+    if: github.event_name == 'push'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86_64
+            os: ubuntu-22.04
+            suffix: x86_64-unknown-linux-gnu
+            binary: target/release/plix
+            exe: plix
+            archive: tar.gz
+
+          - name: Windows x86_64
+            os: windows-2022
+            suffix: x86_64-pc-windows-msvc
+            binary: target/release/plix.exe
+            exe: plix.exe
+            archive: zip
+
+          - name: macOS
+            os: macos-latest
+            suffix: apple-darwin
+            binary: target/release/plix
+            exe: plix
+            archive: tar.gz
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --release --locked
+
+      - name: Smoke test release binary
+        run: ${{ matrix.binary }} --version
+        shell: bash
+
+      - name: Package Unix artifact
+        if: runner.os != 'Windows'
+        id: package_unix
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION=$(awk -F '"' '/^version =/ { print $2; exit }' Cargo.toml)
+          SUFFIX="${{ matrix.suffix }}"
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            SUFFIX="$(uname -m)-${SUFFIX}"
+          fi
+
+          PKG="plix-${VERSION}-${SUFFIX}"
+          mkdir -p "dist/${PKG}/bin" "dist/${PKG}/tests"
+          cp "${{ matrix.binary }}" "dist/${PKG}/bin/${{ matrix.exe }}"
+          cp README.md LICENSE "dist/${PKG}/"
+          cp -R docs examples "dist/${PKG}/"
+          cp tests/run_all.sh tests/fuzz_parity.sh tests/fuzz_gen.px tests/core_test.px "dist/${PKG}/tests/"
+
+          tar -czf "dist/${PKG}.tar.gz" -C dist "${PKG}"
+          echo "artifact_name=${PKG}" >> "$GITHUB_OUTPUT"
+          echo "archive_path=dist/${PKG}.tar.gz" >> "$GITHUB_OUTPUT"
+
+      - name: Package Windows artifact
+        if: runner.os == 'Windows'
+        id: package_windows
+        shell: pwsh
+        run: |
+          $versionLine = Select-String -Path Cargo.toml -Pattern '^version = "([^\"]+)"' | Select-Object -First 1
+          $version = $versionLine.Matches[0].Groups[1].Value
+          $pkg = "plix-$version-${{ matrix.suffix }}"
+          $pkgDir = "dist/$pkg"
+
+          New-Item -ItemType Directory -Force -Path "$pkgDir/bin", "$pkgDir/tests" | Out-Null
+          Copy-Item "${{ matrix.binary }}" "$pkgDir/bin/${{ matrix.exe }}"
+          Copy-Item README.md, LICENSE -Destination $pkgDir
+          Copy-Item docs, examples -Destination $pkgDir -Recurse
+          Copy-Item tests/run_all.sh, tests/fuzz_parity.sh, tests/fuzz_gen.px, tests/core_test.px -Destination "$pkgDir/tests"
+
+          Compress-Archive -Path $pkgDir -DestinationPath "dist/$pkg.zip" -Force
+          "artifact_name=$pkg" >> $env:GITHUB_OUTPUT
+          "archive_path=dist/$pkg.zip" >> $env:GITHUB_OUTPUT
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package_unix.outputs.artifact_name || steps.package_windows.outputs.artifact_name }}
+          path: ${{ steps.package_unix.outputs.archive_path || steps.package_windows.outputs.archive_path }}
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: package
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Download packaged artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: plix-*
+          merge-multiple: true
+          path: release-assets
+
+      - name: Show release assets
+        run: find release-assets -type f -maxdepth 2 -print
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/*
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
