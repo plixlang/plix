@@ -101,10 +101,8 @@ fn to_repr_depth(v: V, depth: usize) -> String {
             HeapObj::Float(f) => format!("{:?}", f),
             HeapObj::Str(s) => format!("\"{}\"", escape_str(s)),
             HeapObj::Array(items) => {
-                let parts: Vec<String> = items
-                    .iter()
-                    .map(|&x| to_repr_depth(x, depth + 1))
-                    .collect();
+                let parts: Vec<String> =
+                    items.iter().map(|&x| to_repr_depth(x, depth + 1)).collect();
                 format!("[{}]", parts.join(", "))
             }
             HeapObj::Map(m) => {
@@ -128,10 +126,7 @@ fn to_repr_depth(v: V, depth: usize) -> String {
                     .unwrap_or_default();
                 let mut parts: Vec<String> = Vec::with_capacity(fields.len());
                 for (i, &fv) in fields.iter().enumerate() {
-                    let fname = fnames
-                        .get(i)
-                        .cloned()
-                        .unwrap_or_else(|| format!("_{}", i));
+                    let fname = fnames.get(i).cloned().unwrap_or_else(|| format!("_{}", i));
                     parts.push(format!("{}: {}", fname, to_repr_depth(fv, depth + 1)));
                 }
                 format!("{} {{ {} }}", name, parts.join(", "))
@@ -185,7 +180,9 @@ fn eq_depth(a: V, b: V, depth: usize) -> bool {
             (Some(HeapObj::Str(x)), Some(HeapObj::Str(y))) => x == y,
             (Some(HeapObj::Array(x)), Some(HeapObj::Array(y))) => {
                 x.len() == y.len()
-                    && x.iter().zip(y.iter()).all(|(&p, &q)| eq_depth(p, q, depth + 1))
+                    && x.iter()
+                        .zip(y.iter())
+                        .all(|(&p, &q)| eq_depth(p, q, depth + 1))
             }
             (Some(HeapObj::Map(x)), Some(HeapObj::Map(y))) => {
                 x.len() == y.len()
@@ -193,8 +190,14 @@ fn eq_depth(a: V, b: V, depth: usize) -> bool {
                         .all(|(k, &v)| y.get(k).map_or(false, |&w| eq_depth(v, w, depth + 1)))
             }
             (
-                Some(HeapObj::Instance { def: d1, fields: f1 }),
-                Some(HeapObj::Instance { def: d2, fields: f2 }),
+                Some(HeapObj::Instance {
+                    def: d1,
+                    fields: f1,
+                }),
+                Some(HeapObj::Instance {
+                    def: d2,
+                    fields: f2,
+                }),
             ) => {
                 // structural equality within the same struct type
                 d1 == d2
@@ -220,7 +223,7 @@ unsafe fn payload_opt(v: V) -> Option<&'static HeapObj> {
 
 /// < <= > >= : numbers and strings only.
 pub fn compare(a: V, b: V) -> Result<std::cmp::Ordering, String> {
-        let num = |v: V| -> Option<f64> {
+    let num = |v: V| -> Option<f64> {
         if is_int(v) {
             Some(as_int(v) as f64)
         } else {
@@ -233,7 +236,9 @@ pub fn compare(a: V, b: V) -> Result<std::cmp::Ordering, String> {
         }
     };
     if let (Some(x), Some(y)) = (num(a), num(b)) {
-        return x.partial_cmp(&y).ok_or_else(|| "comparison with NaN".to_string());
+        return x
+            .partial_cmp(&y)
+            .ok_or_else(|| "comparison with NaN".to_string());
     }
     unsafe {
         if let (Some(HeapObj::Str(x)), Some(HeapObj::Str(y))) = (payload_opt(a), payload_opt(b)) {
@@ -266,7 +271,8 @@ pub fn add(a: V, b: V) -> OpResult {
             s.push_str(y);
             return Ok(mk_string(s));
         }
-        if let (Some(HeapObj::Array(x)), Some(HeapObj::Array(y))) = (payload_opt(a), payload_opt(b)) {
+        if let (Some(HeapObj::Array(x)), Some(HeapObj::Array(y))) = (payload_opt(a), payload_opt(b))
+        {
             let mut v = x.clone();
             v.extend(y.iter().copied());
             return Ok(mk_array(v));
@@ -403,7 +409,11 @@ pub fn shr(a: V, b: V) -> OpResult {
         if y < 0 {
             return Err("negative shift count".into());
         }
-        return Ok(if y >= 62 { mk_int(if x >= 0 { 0 } else { -1 }) } else { mk_int(x >> y) });
+        return Ok(if y >= 62 {
+            mk_int(if x >= 0 { 0 } else { -1 })
+        } else {
+            mk_int(x >> y)
+        });
     }
     Err(type_err(">>", a, b))
 }
@@ -506,7 +516,10 @@ pub fn index_set(v: V, idx: V, val: V) -> OpResult {
             }
             Some(HeapObj::PyObj(p)) => crate::pyffi::py_index_set(*p, idx, val),
             Some(HeapObj::PyBound(..)) => Err("cannot index a bound attribute".into()),
-            _ => Err(format!("cannot index-assign value of type {}", kind_name(v))),
+            _ => Err(format!(
+                "cannot index-assign value of type {}",
+                kind_name(v)
+            )),
         }
     }
 }
@@ -548,9 +561,8 @@ pub fn member_get(v: V, name: &str) -> OpResult {
                 }
             }
             Some(HeapObj::Instance { def, fields }) => {
-                let info = struct_info(*def).ok_or_else(|| {
-                    "instance with invalid type descriptor".to_string()
-                })?;
+                let info = struct_info(*def)
+                    .ok_or_else(|| "instance with invalid type descriptor".to_string())?;
                 if let Some(&i) = info.index.get(name) {
                     return Ok(use_locked(fields[i]));
                 }
@@ -576,9 +588,7 @@ pub fn member_get(v: V, name: &str) -> OpResult {
                     )),
                 }
             }
-            Some(HeapObj::Bound { .. }) => {
-                Err("cannot take member of a bound method".into())
-            }
+            Some(HeapObj::Bound { .. }) => Err("cannot take member of a bound method".into()),
             _ => Err(format!(
                 "value of type {} has no member \"{}\"",
                 kind_name(v),
@@ -694,7 +704,10 @@ fn coerce_field(val: V, ft: &FieldInfo) -> Result<V, String> {
 /// Array pseudo-methods: arr.length  (kept tiny; functions live in builtins).
 fn builtin_array_member(name: &str) -> OpResult {
     match name {
-        _ => Err(format!("array has no member \"{}\" (try a function like len, push, map)", name)),
+        _ => Err(format!(
+            "array has no member \"{}\" (try a function like len, push, map)",
+            name
+        )),
     }
 }
 fn builtin_str_member(name: &str) -> OpResult {
@@ -716,9 +729,8 @@ pub fn member_set(v: V, name: &str, val: V) -> OpResult {
             }
             Some(HeapObj::PyObj(p)) => crate::pyffi::py_setattr(*p, name, val),
             Some(HeapObj::Instance { def, .. }) => {
-                let info = struct_info(*def).ok_or_else(|| {
-                    "instance with invalid type descriptor".to_string()
-                })?;
+                let info = struct_info(*def)
+                    .ok_or_else(|| "instance with invalid type descriptor".to_string())?;
                 let Some(&i) = info.index.get(name) else {
                     return Err(format!(
                         "instance of {} has no field \"{}\"",
@@ -831,7 +843,7 @@ impl Caller for NativeCaller {
             if is_ptr(f) {
                 if let HeapObj::ClsAst { .. } = payload(f) {
                     return Err(
-                        "cannot invoke an interpreter (AST) closure from native code".into()
+                        "cannot invoke an interpreter (AST) closure from native code".into(),
                     );
                 }
             }
@@ -847,8 +859,7 @@ pub fn call_value(caller: &mut dyn Caller, f: V, args: &[V]) -> OpResult {
         match payload_opt(f) {
             Some(HeapObj::ClsNative { code, cells, name }) => {
                 trace_push(name);
-                let fp: extern "C" fn(*const V, *const V, i64) -> V =
-                    std::mem::transmute(*code);
+                let fp: extern "C" fn(*const V, *const V, i64) -> V = std::mem::transmute(*code);
                 let r = fp(cells.as_ptr(), args.as_ptr(), args.len() as i64);
                 trace_pop();
                 if err_flag() {
@@ -967,10 +978,14 @@ macro_rules! wrap_cmp {
 
 wrap_cmp!(plix_eq, |a, b| Ok(values_eq(a, b)));
 wrap_cmp!(plix_ne, |a, b| Ok(!values_eq(a, b)));
-wrap_cmp!(plix_lt, |a, b| compare(a, b).map(|o| o == std::cmp::Ordering::Less));
-wrap_cmp!(plix_le, |a, b| compare(a, b).map(|o| o != std::cmp::Ordering::Greater));
-wrap_cmp!(plix_gt, |a, b| compare(a, b).map(|o| o == std::cmp::Ordering::Greater));
-wrap_cmp!(plix_ge, |a, b| compare(a, b).map(|o| o != std::cmp::Ordering::Less));
+wrap_cmp!(plix_lt, |a, b| compare(a, b)
+    .map(|o| o == std::cmp::Ordering::Less));
+wrap_cmp!(plix_le, |a, b| compare(a, b)
+    .map(|o| o != std::cmp::Ordering::Greater));
+wrap_cmp!(plix_gt, |a, b| compare(a, b)
+    .map(|o| o == std::cmp::Ordering::Greater));
+wrap_cmp!(plix_ge, |a, b| compare(a, b)
+    .map(|o| o != std::cmp::Ordering::Less));
 
 #[no_mangle]
 pub extern "C" fn plix_str_of(v: V) -> V {

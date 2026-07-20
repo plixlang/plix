@@ -132,10 +132,7 @@ fn read_request(stream: &mut TcpStream) -> OpResultT<Option<Request>> {
     body.truncate(content_length);
 
     let (path, query) = match target.find('?') {
-        Some(q) => (
-            target[..q].to_string(),
-            parse_query(&target[q + 1..]),
-        ),
+        Some(q) => (target[..q].to_string(), parse_query(&target[q + 1..])),
         None => (target.clone(), HashMap::new()),
     };
 
@@ -209,7 +206,8 @@ pub fn net_serve(caller: &mut dyn Caller, args: &[V]) -> OpResult {
         return err("net.serve: expected (addr, handler)");
     }
     let handler = args[1];
-    let listener = TcpListener::bind(&addr).map_err(|e| format!("net.serve: bind {}: {}", addr, e))?;
+    let listener =
+        TcpListener::bind(&addr).map_err(|e| format!("net.serve: bind {}: {}", addr, e))?;
     eprintln!("[plix net] listening on http://{}", addr);
     for stream in listener.incoming() {
         let mut stream = match stream {
@@ -270,7 +268,12 @@ fn handle_conn(caller: &mut dyn Caller, stream: &mut TcpStream, handler: V) -> O
         String,
         String,
         Vec<(String, String)>,
-    ) = (200, "text/plain; charset=utf-8".to_string(), String::new(), Vec::new());
+    ) = (
+        200,
+        "text/plain; charset=utf-8".to_string(),
+        String::new(),
+        Vec::new(),
+    );
     unsafe {
         if is_null(resp) {
             code = 204;
@@ -385,9 +388,12 @@ struct Url {
 }
 
 fn parse_url(url: &str) -> OpResultT<Url> {
-    let rest = url
-        .strip_prefix("http://")
-        .ok_or_else(|| format!("url must start with http:// (https not supported in v0.1): {}", url))?;
+    let rest = url.strip_prefix("http://").ok_or_else(|| {
+        format!(
+            "url must start with http:// (https not supported in v0.1): {}",
+            url
+        )
+    })?;
     let (hostport, path) = match rest.find('/') {
         Some(i) => (&rest[..i], &rest[i..]),
         None => (rest, "/"),
@@ -395,7 +401,9 @@ fn parse_url(url: &str) -> OpResultT<Url> {
     let (host, port) = match hostport.find(':') {
         Some(i) => (
             hostport[..i].to_string(),
-            hostport[i + 1..].parse().map_err(|_| "bad port".to_string())?,
+            hostport[i + 1..]
+                .parse()
+                .map_err(|_| "bad port".to_string())?,
         ),
         None => (hostport.to_string(), 80),
     };
@@ -406,12 +414,7 @@ fn parse_url(url: &str) -> OpResultT<Url> {
     })
 }
 
-fn http_request(
-    method: &str,
-    url: &str,
-    body: Option<&[u8]>,
-    ctype: Option<&str>,
-) -> OpResultT<V> {
+fn http_request(method: &str, url: &str, body: Option<&[u8]>, ctype: Option<&str>) -> OpResultT<V> {
     let u = parse_url(url)?;
     let mut stream = TcpStream::connect((u.host.as_str(), u.port))
         .map_err(|e| format!("connect {}:{}: {}", u.host, u.port, e))?;

@@ -1,0 +1,19 @@
+// Function type syntax and checking: `(A, B) -> R`.
+
+func add(a: int, b: int) -> int {
+    return a + b;
+}
+
+func apply(x: int, f: (int) -> int) -> int {
+    return f(x);
+}
+
+func test_function_type_variable() {
+    auto f: (int, int) -> int = add;
+    assert_eq(f(20, 22), 42);
+}
+
+func test_function_type_param() {
+    auto inc = func(x: int) -> int { return x + 1; };
+    assert_eq(apply(41, inc), 42);
+}

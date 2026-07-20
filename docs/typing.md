@@ -26,10 +26,15 @@ for (v: int in xs) { ... }             // for-in element
 struct Vec2 { x: float, y: float, name: str = "v" }   // fields
 ```
 
-Type names: `int float bool str array map func` and any user struct/trait
-name. Generic sugar is parsed (`array<int>`, `map<str, int>`) but currently
-erased to the erased container (`array`, `map`); element types are a later
-milestone. `null` is assignable only to untyped slots.
+Type names: `any int float bool str array map func Result` and any user
+struct/trait name. `array<T>` and `map<K, V>` are checked at typed boundaries
+such as variable declarations, index assignment, for-in element annotations and
+struct fields. Nullable values are written as `T?` or `Option<T>`; `None` is
+an alias for `null`, and `Some(x)` is the non-null constructor. Function values
+can be typed with `(A, B) -> R`, for example `auto f: (int, int) -> int = add;`.
+Recoverable APIs can use `Result<T, E>` with `Ok(v)` / `Err(e)` and exhaustive
+`match`. Nullary user enums are supported for finite-state values:
+`enum Color { Red, Green, Blue }`.
 
 ## The contract
 

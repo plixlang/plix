@@ -1,0 +1,20 @@
+// User enum foundation: nullary variants + exhaustive match.
+
+enum Color {
+    Red,
+    Green,
+    Blue,
+}
+
+func label(c: Color) -> str {
+    return match c {
+        Red => "red",
+        Green => "green",
+        Blue => "blue",
+    };
+}
+
+func test_enum_match() {
+    assert_eq(label(Red), "red");
+    assert_eq(label(Blue), "blue");
+}

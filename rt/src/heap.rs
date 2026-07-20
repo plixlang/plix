@@ -107,10 +107,16 @@ pub enum HeapObj {
     /// A `struct` type object (value bound to the struct's name).
     StructDef(Box<StructInfo>),
     /// An instance of a struct; `fields` are in declaration order.
-    Instance { def: V, fields: Vec<V> },
+    Instance {
+        def: V,
+        fields: Vec<V>,
+    },
     /// Method bound to a receiver (`obj.meth` yields this); calling it
     /// prepends `recv` to the argument list.
-    Bound { recv: V, f: V },
+    Bound {
+        recv: V,
+        f: V,
+    },
 }
 
 pub struct HeapBox {
@@ -1079,4 +1085,72 @@ pub extern "C" fn plix_as_f64(v: V) -> f64 {
         type_name(v)
     ));
     0.0
+}
+
+/// Lightweight tagged-union value used by built-in `Ok`/`Err` and by future
+/// enum lowering. It is intentionally represented as a normal object so old
+/// dynamic code can still inspect it if needed.
+pub fn mk_variant(name: &str, payload: V, has_payload: bool) -> V {
+    let mut m = HashMap::new();
+    m.insert("__tag".to_string(), mk_str_from(name));
+    m.insert("__has".to_string(), bool_of(has_payload));
+    if has_payload {
+        m.insert("0".to_string(), payload);
+    }
+    mk_map(m)
+}
+
+pub fn variant_is(v: V, name: &str) -> bool {
+    unsafe {
+        let Some(HeapObj::Map(m)) = payload_opt_pub(v) else {
+            return false;
+        };
+        let Some(&tag) = m.get("__tag") else {
+            return false;
+        };
+        match payload_opt_pub(tag) {
+            Some(HeapObj::Str(s)) => s == name,
+            _ => false,
+        }
+    }
+}
+
+pub fn variant_field(v: V, idx: usize) -> V {
+    unsafe {
+        let Some(HeapObj::Map(m)) = payload_opt_pub(v) else {
+            return NULL;
+        };
+        m.get(&idx.to_string()).copied().unwrap_or(NULL)
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn plix_variant_new(p: *const c_char, len: i64) -> V {
+    let name = unsafe { cstr(p, len) };
+    mk_variant(name, NULL, false)
+}
+
+#[no_mangle]
+pub extern "C" fn plix_variant_is(v: V, p: *const c_char, len: i64) -> i64 {
+    let name = unsafe { cstr(p, len) };
+    if name == "Some" {
+        return if !is_null(v) { 1 } else { 0 };
+    }
+    if variant_is(v, name) {
+        1
+    } else {
+        0
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn plix_variant_field(v: V, idx: i64) -> V {
+    if idx < 0 {
+        return NULL;
+    }
+    // Option<T> is represented as `T | null`; Some(x)'s field 0 is x.
+    if !is_null(v) && idx == 0 && !variant_is(v, "Ok") && !variant_is(v, "Err") {
+        return v;
+    }
+    variant_field(v, idx as usize)
 }

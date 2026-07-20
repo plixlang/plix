@@ -1,0 +1,40 @@
+// Built-in sum-type foundations: Option<T> via T?/Some/None and Result<T,E>.
+
+func maybe(flag: bool) -> Option<int> {
+    if (flag) { return Some(10); }
+    return None;
+}
+
+func parse_like(s: str) -> Result<int, str> {
+    if (s == "42") { return Ok(42); }
+    return Err("bad int");
+}
+
+func test_option_match() {
+    auto x = maybe(true);
+    auto y = match x {
+        Some(v) => v + 1,
+        None => 0,
+    };
+    assert_eq(y, 11);
+
+    auto z = match maybe(false) {
+        Some(v) => v,
+        None => -1,
+    };
+    assert_eq(z, -1);
+}
+
+func test_result_match() {
+    auto a = match parse_like("42") {
+        Ok(v) => v,
+        Err(e) => 0,
+    };
+    assert_eq(a, 42);
+
+    auto b = match parse_like("x") {
+        Ok(v) => v,
+        Err(e) => len(e),
+    };
+    assert_eq(b, 7);
+}

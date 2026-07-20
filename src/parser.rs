@@ -142,6 +142,7 @@ impl Parser {
             Tok::StructKw => self.struct_decl(),
             Tok::ImplKw => self.impl_decl(),
             Tok::TraitKw => self.trait_decl(),
+            Tok::EnumKw => self.enum_decl(),
             Tok::Import => self.import_stmt(),
             Tok::LBrace => {
                 self.bump();
@@ -214,19 +215,56 @@ impl Parser {
     // ---------------- types (v0.3) ----------------
     fn parse_type(&mut self) -> PResult<TypeExpr> {
         let sp = self.span();
-        let (name, _) = self.expect_ident()?;
-        let mut args = Vec::new();
-        if self.eat(&Tok::Lt) {
-            loop {
-                args.push(self.parse_type()?);
-                if self.eat(&Tok::Comma) {
-                    continue;
+        let mut ty = if self.eat(&Tok::LParen) {
+            // Function type: `(A, B) -> R`. Internally this is encoded as
+            // TypeExpr { name: "func", args: [A, B, R] } where the last arg
+            // is the return type.
+            let mut args = Vec::new();
+            if !self.at(&Tok::RParen) {
+                loop {
+                    args.push(self.parse_type()?);
+                    if !self.eat(&Tok::Comma) {
+                        break;
+                    }
                 }
-                self.expect_gt()?;
-                break;
             }
+            self.expect(&Tok::RParen, "')' in function type")?;
+            self.expect(&Tok::Arrow, "'->' in function type")?;
+            args.push(self.parse_type()?);
+            TypeExpr {
+                name: "func".to_string(),
+                args,
+                span: sp,
+            }
+        } else {
+            let (name, _) = self.expect_ident()?;
+            let mut args = Vec::new();
+            if self.eat(&Tok::Lt) {
+                loop {
+                    args.push(self.parse_type()?);
+                    if self.eat(&Tok::Comma) {
+                        continue;
+                    }
+                    self.expect_gt()?;
+                    break;
+                }
+            }
+            TypeExpr {
+                name,
+                args,
+                span: sp,
+            }
+        };
+        // nullable shorthand: `int?`, `User?`, `array<int>?`, `(int)->str?`.
+        // Lowered as `Option<T>` so the checker has a single representation.
+        if self.eat(&Tok::Question) {
+            ty = TypeExpr {
+                name: "Option".to_string(),
+                args: vec![ty],
+                span: sp,
+            };
         }
-        Ok(TypeExpr { name, args, span: sp })
+        Ok(ty)
     }
 
     /// expect `>`; `>>` (lexed as one Shl/Shr token: here Shr) counts as two
@@ -346,6 +384,52 @@ impl Parser {
         ))
     }
 
+    fn enum_decl(&mut self) -> PResult<Stmt> {
+        let sp = self.span();
+        self.bump(); // enum
+        let (name, _) = self.expect_ident()?;
+        // Generic parameter names are accepted for source compatibility; they
+        // are currently checked structurally through uses like Result<T,E>.
+        if self.eat(&Tok::Lt) {
+            loop {
+                let _ = self.expect_ident()?;
+                if self.eat(&Tok::Comma) {
+                    continue;
+                }
+                self.expect_gt()?;
+                break;
+            }
+        }
+        self.expect(&Tok::LBrace, "'{'")?;
+        let mut variants = Vec::new();
+        while !self.at(&Tok::RBrace) && !self.at(&Tok::Eof) {
+            let vsp = self.span();
+            let (vname, _) = self.expect_ident()?;
+            let mut fields = Vec::new();
+            if self.eat(&Tok::LParen) {
+                if !self.at(&Tok::RParen) {
+                    loop {
+                        fields.push(self.parse_type()?);
+                        if !self.eat(&Tok::Comma) {
+                            break;
+                        }
+                    }
+                }
+                self.expect(&Tok::RParen, "')' in enum variant")?;
+            }
+            variants.push(EnumVariantDef {
+                name: vname,
+                fields,
+                span: vsp,
+            });
+            if !self.eat(&Tok::Comma) {
+                break;
+            }
+        }
+        self.expect(&Tok::RBrace, "'}'")?;
+        Ok(Stmt::new(StmtKind::Enum { name, variants }, sp))
+    }
+
     fn trait_decl(&mut self) -> PResult<Stmt> {
         let sp = self.span();
         self.bump(); // trait
@@ -402,7 +486,11 @@ impl Parser {
                 if let Tok::Ident(n) = self.cur().tok.clone() {
                     if n == "self" {
                         self.bump();
-                        rec = Some(if is_mut { Receiver::MutRef } else { Receiver::Ref });
+                        rec = Some(if is_mut {
+                            Receiver::MutRef
+                        } else {
+                            Receiver::Ref
+                        });
                     }
                 }
             } else if let Tok::Ident(n) = self.cur().tok.clone() {
@@ -739,7 +827,10 @@ impl Parser {
             });
         }
         self.expect(&Tok::RBrace, "'}'")?;
-        Ok((Expr::new(ExprKind::Ident("<match-subject>".into()), sp), arms)
+        Ok((
+            Expr::new(ExprKind::Ident("<match-subject>".into()), sp),
+            arms,
+        )
             .map_subject(subject))
     }
 
@@ -796,15 +887,33 @@ impl Parser {
             Tok::Ident(name) => {
                 self.bump();
                 if name == "_" {
-                    Ok(Pattern::Wildcard)
+                    return Ok(Pattern::Wildcard);
+                }
+                if self.eat(&Tok::LParen) {
+                    let mut args = Vec::new();
+                    if !self.at(&Tok::RParen) {
+                        loop {
+                            args.push(self.pattern()?);
+                            if !self.eat(&Tok::Comma) {
+                                break;
+                            }
+                        }
+                    }
+                    self.expect(&Tok::RParen, "')' in variant pattern")?;
+                    return Ok(Pattern::Variant(name, args));
+                }
+                let is_variant = name
+                    .chars()
+                    .next()
+                    .map(|c| c.is_ascii_uppercase())
+                    .unwrap_or(false);
+                if is_variant {
+                    Ok(Pattern::Variant(name, Vec::new()))
                 } else {
                     Ok(Pattern::Ident(name))
                 }
             }
-            _ => Err(self.error(format!(
-                "expected pattern (found {})",
-                t.tok.describe()
-            ))),
+            _ => Err(self.error(format!("expected pattern (found {})", t.tok.describe()))),
         }
     }
 
@@ -835,7 +944,7 @@ impl Parser {
                 return Err(ParseError {
                     msg: "invalid assignment target".into(),
                     span: sp,
-                })
+                });
             }
         };
         Ok(Expr::new(
@@ -981,15 +1090,15 @@ impl Parser {
                 let mutable = self.eat(&Tok::Mut);
                 let e = self.unary()?;
                 match &e.node {
-                    ExprKind::Ident(_) | ExprKind::Index(..) | ExprKind::Member(..) => Ok(
-                        Expr::new(
+                    ExprKind::Ident(_) | ExprKind::Index(..) | ExprKind::Member(..) => {
+                        Ok(Expr::new(
                             ExprKind::Borrow {
                                 mutable,
                                 expr: Box::new(e),
                             },
                             sp,
-                        ),
-                    ),
+                        ))
+                    }
                     _ => Err(ParseError {
                         msg: "borrow operator & requires a variable, index, or member".into(),
                         span: sp,
@@ -1095,7 +1204,13 @@ impl Parser {
                         }
                     }
                     self.expect(&Tok::RBrace, "'}' in struct literal")?;
-                    e = Expr::new(ExprKind::StructLit { name: struct_name, fields }, sp);
+                    e = Expr::new(
+                        ExprKind::StructLit {
+                            name: struct_name,
+                            fields,
+                        },
+                        sp,
+                    );
                 }
                 _ => break,
             }
@@ -1230,10 +1345,7 @@ impl Parser {
                     sp,
                 ))
             }
-            _ => Err(self.error(format!(
-                "expected expression (found {})",
-                t.tok.describe()
-            ))),
+            _ => Err(self.error(format!("expected expression (found {})", t.tok.describe()))),
         }
     }
 
@@ -1264,7 +1376,10 @@ impl Parser {
             };
             acc = Some(match acc {
                 None => piece,
-                Some(a) => Expr::new(ExprKind::Binary(BinOp::Add, Box::new(a), Box::new(piece)), sp),
+                Some(a) => Expr::new(
+                    ExprKind::Binary(BinOp::Add, Box::new(a), Box::new(piece)),
+                    sp,
+                ),
             });
         }
         Ok(acc.unwrap())

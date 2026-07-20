@@ -1,0 +1,57 @@
+// Phase 1 type-system coverage: explicit any, generic arrays/maps,
+// nullable shorthand (T? / Option<T>) and bool match exhaustiveness.
+
+func id(x) { return x; }
+
+func maybe(flag: bool) -> int? {
+    if (flag) { return 7; }
+    return null;
+}
+
+func maybe_dyn(x) -> int? {
+    return x;
+}
+
+func test_explicit_any() {
+    auto x: any = 123;
+    x = "dynamic";
+    assert_eq(x, "dynamic");
+}
+
+func test_array_generic_positive() {
+    auto xs: array<int> = [1, 2, 3];
+    xs[1] = 20;
+    auto total: int = 0;
+    for (x: int in xs) {
+        total += x;
+    }
+    assert_eq(total, 24);
+}
+
+func test_map_generic_positive() {
+    auto m: map<str, int> = { "a": 1, "b": 2 };
+    m["a"] = 10;
+    assert_eq(m["a"] + m["b"], 12);
+}
+
+func test_nullable_int() {
+    auto a: int? = null;
+    assert_eq(a, null);
+    a = 42;
+    assert_eq(a, 42);
+
+    auto b = maybe(false);
+    assert_eq(b, null);
+    auto c = maybe(true);
+    assert_eq(c, 7);
+    assert_eq(maybe_dyn(null), null);
+    assert_eq(maybe_dyn(9), 9);
+}
+
+func test_bool_match_exhaustive_ok() {
+    auto label = match true {
+        true => "yes",
+        false => "no",
+    };
+    assert_eq(label, "yes");
+}

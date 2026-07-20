@@ -301,7 +301,11 @@ fn fetch_err(py: &Py) -> String {
         if (py.Err_Occurred)().is_null() {
             return "unknown python error".into();
         }
-        let (mut t, mut v, mut tb) = (std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut());
+        let (mut t, mut v, mut tb) = (
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        );
         (py.Err_Fetch)(&mut t, &mut v, &mut tb);
         let msg = if !v.is_null() {
             let s = (py.Object_Str)(v);
@@ -391,9 +395,9 @@ unsafe fn plix_to_py(py: &Py, v: V) -> Result<Ptr, String> {
             (py.IncRef)(*p);
             Ok(*p)
         }
-        HeapObj::PyBound(..) => Err(
-            "cannot pass a bound python attribute as a value (call it first)".into(),
-        ),
+        HeapObj::PyBound(..) => {
+            Err("cannot pass a bound python attribute as a value (call it first)".into())
+        }
         HeapObj::ClsNative { .. } | HeapObj::ClsAst { .. } | HeapObj::Builtin(_) => {
             Err("cannot pass Plix functions to python (v0.1)".into())
         }

@@ -22,7 +22,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-const VERSION: &str = "0.3.0";
+const VERSION: &str = "0.4.0";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
@@ -379,8 +379,8 @@ fn cmd_repl() -> ExitCode {
                 if let Ok(info) = typecheck::check_program(&checked_stmts) {
                     it.tinfo = std::rc::Rc::new(info);
                 }
-                let show_value = stmts.len() == 1
-                    && matches!(stmts[0].node, ast::StmtKind::ExprStmt(_));
+                let show_value =
+                    stmts.len() == 1 && matches!(stmts[0].node, ast::StmtKind::ExprStmt(_));
                 let prog = ast::Program {
                     stmts,
                     source_name: "<repl>".into(),

@@ -8,7 +8,7 @@
 
 use crate::ast::*;
 use plixrt::builtins;
-use plixrt::heap::{self, V, NULL};
+use plixrt::heap::{self, NULL, V};
 use plixrt::value::{self, Caller, DepthGuard, OpResult};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -115,6 +115,9 @@ fn strict_int_arith(op: BinOp, a: V, b: V) -> Option<Result<V, String>> {
 /// native backend's unboxed-slot guards (same messages, same fire points).
 /// `what` names the slot (variable name, `argument "n" of f`, ...).
 fn guard_typed(v: V, flags: u8, what: &str) -> Result<V, String> {
+    if flags & FLAG_GUARD_NULLABLE != 0 && heap::is_null(v) {
+        return Ok(v);
+    }
     if flags & FLAG_GUARD_INT != 0 {
         if !heap::is_int(v) {
             return Err(heap::guard_msg_int(what));
@@ -132,12 +135,25 @@ fn guard_typed(v: V, flags: u8, what: &str) -> Result<V, String> {
     Ok(v)
 }
 
+/// Runtime's struct-field descriptor is intentionally erased. Keep generic
+/// containers as their erased runtime kind, and erase nullable fields to `any`
+/// because the static checker owns the `T?` contract.
+fn runtime_field_ty_name(ty: &TypeExpr) -> String {
+    match ty.name.as_str() {
+        "Option" | "option" => String::new(),
+        other => other.to_string(),
+    }
+}
+
 /// guard bits implied by a type *annotation* (params, return types)
-fn guard_flags_of(tyname: &str) -> u8 {
-    match tyname {
+fn guard_flags_of_type(ty: &TypeExpr) -> u8 {
+    match ty.name.as_str() {
         "int" => FLAG_GUARD_INT,
         "float" => FLAG_GUARD_FLOAT,
         "bool" => FLAG_GUARD_BOOL,
+        "Option" | "option" if ty.args.len() == 1 => {
+            FLAG_GUARD_NULLABLE | guard_flags_of_type(&ty.args[0])
+        }
         _ => 0,
     }
 }
@@ -189,10 +205,10 @@ impl Interpreter {
 
     fn define_global(&self, name: &str, v: V, mutable: bool) {
         heap::swap_var(NULL, v); // hold one ref in the slot
-        self.globals.borrow_mut().vars.insert(
-            name.to_string(),
-            Rc::new(RefCell::new(Slot { v, mutable })),
-        );
+        self.globals
+            .borrow_mut()
+            .vars
+            .insert(name.to_string(), Rc::new(RefCell::new(Slot { v, mutable })));
     }
 
     /// Bind (or rebind) a variable in the given scope.
@@ -252,7 +268,9 @@ impl Interpreter {
     // ---------------------------------------------------------------
     fn exec(&mut self, s: &Stmt, env: &Env) -> R<Flow> {
         match &s.node {
-            StmtKind::Var { kind, name, value, .. } => {
+            StmtKind::Var {
+                kind, name, value, ..
+            } => {
                 let cp = heap::arena_checkpoint();
                 let v = self.eval(value, env)?;
                 // annotated slot: same boundary guard/conversion as native
@@ -276,7 +294,7 @@ impl Interpreter {
                         Some(de) => (self.eval(de, env)?, true),
                         None => (NULL, false),
                     };
-                    let tyn = f.ty.as_ref().map(|t| t.name.clone()).unwrap_or_default();
+                    let tyn = f.ty.as_ref().map(runtime_field_ty_name).unwrap_or_default();
                     heap::structdef_add_field(def, &f.name, &tyn, dval, has);
                     heap::arena_rewind(cp);
                 }
@@ -294,7 +312,7 @@ impl Interpreter {
                         return Err(rterr(
                             s.span,
                             format!("impl target \"{}\" is not a known struct", target),
-                        ))
+                        ));
                     }
                 };
                 let def_v = slot.borrow().v;
@@ -325,6 +343,15 @@ impl Interpreter {
             }
             StmtKind::Trait { .. } => {
                 // compile-time only: defaults are resolved into impls
+                Ok(Flow::None)
+            }
+            StmtKind::Enum { name: _, variants } => {
+                for vdef in variants {
+                    if vdef.fields.is_empty() {
+                        let v = heap::mk_variant(&vdef.name, NULL, false);
+                        self.define_var(env, &vdef.name, v, VarKind::Const);
+                    }
+                }
                 Ok(Flow::None)
             }
             StmtKind::Import {
@@ -451,7 +478,9 @@ impl Interpreter {
                 }
                 Ok(Flow::None)
             }
-            StmtKind::ForIn { name, iter, body, .. } => {
+            StmtKind::ForIn {
+                name, iter, body, ..
+            } => {
                 let cp = heap::arena_checkpoint();
                 let it = match self.eval(iter, env) {
                     Ok(v) => v,
@@ -515,11 +544,9 @@ impl Interpreter {
                 heap::release_plain(arr_keep);
                 result
             }
-            StmtKind::MatchStmt { subject, arms } => {
-                match self.exec_match(subject, arms, env)? {
-                    (flow, _) => Ok(flow),
-                }
-            }
+            StmtKind::MatchStmt { subject, arms } => match self.exec_match(subject, arms, env)? {
+                (flow, _) => Ok(flow),
+            },
             StmtKind::Return(v) => {
                 let cp = heap::arena_checkpoint();
                 let r = match v {
@@ -558,14 +585,13 @@ impl Interpreter {
         let sv = heap::use_var(sv);
         for arm in arms {
             for pat in &arm.pats {
-                let (matched, bind_name) = self.pattern_matches(pat, sv);
-                if matched {
+                if let Some(bindings) = self.pattern_bindings(pat, sv) {
                     let arm_env = Rc::new(RefCell::new(Scope {
                         vars: HashMap::new(),
                         parent: Some(env.clone()),
                     }));
-                    if let Some(n) = bind_name {
-                        self.define_var(&arm_env, &n, heap::use_var(sv), VarKind::Auto);
+                    for (n, v) in bindings {
+                        self.define_var(&arm_env, &n, heap::use_var(v), VarKind::Auto);
                     }
                     heap::arena_rewind(cp);
                     match &arm.body {
@@ -590,21 +616,39 @@ impl Interpreter {
             }
         }
         heap::arena_rewind(cp);
-        Err(rterr(
-            subject.span,
-            "non-exhaustive match: no arm matched",
-        ))
+        Err(rterr(subject.span, "non-exhaustive match: no arm matched"))
     }
 
-    fn pattern_matches(&self, pat: &Pattern, sv: V) -> (bool, Option<String>) {
+    fn pattern_bindings(&self, pat: &Pattern, sv: V) -> Option<Vec<(String, V)>> {
         match pat {
-            Pattern::Wildcard => (true, None),
-            Pattern::Ident(n) => (true, Some(n.clone())),
-            Pattern::Null => (heap::is_null(sv), None),
-            Pattern::Bool(b) => (sv == heap::bool_of(*b), None),
-            Pattern::Int(i) => (value::values_eq(sv, heap::mk_int(*i)), None),
-            Pattern::Float(f) => (value::values_eq(sv, heap::mk_float_unchecked(*f)), None),
-            Pattern::Str(s) => (value::values_eq(sv, heap::mk_str_from(s)), None),
+            Pattern::Wildcard => Some(Vec::new()),
+            Pattern::Ident(n) => Some(vec![(n.clone(), sv)]),
+            Pattern::Null => heap::is_null(sv).then(Vec::new),
+            Pattern::Bool(b) => (sv == heap::bool_of(*b)).then(Vec::new),
+            Pattern::Int(i) => value::values_eq(sv, heap::mk_int(*i)).then(Vec::new),
+            Pattern::Float(f) => value::values_eq(sv, heap::mk_float_unchecked(*f)).then(Vec::new),
+            Pattern::Str(s) => value::values_eq(sv, heap::mk_str_from(s)).then(Vec::new),
+            Pattern::Variant(name, args) => {
+                if name == "Some" {
+                    if heap::is_null(sv) || args.len() > 1 {
+                        return None;
+                    }
+                    if args.is_empty() {
+                        return Some(Vec::new());
+                    }
+                    return self.pattern_bindings(&args[0], sv);
+                }
+                if !heap::variant_is(sv, name) {
+                    return None;
+                }
+                let mut out = Vec::new();
+                for (i, p) in args.iter().enumerate() {
+                    let fv = heap::variant_field(sv, i);
+                    let bs = self.pattern_bindings(p, fv)?;
+                    out.extend(bs);
+                }
+                Some(out)
+            }
         }
     }
 
@@ -661,24 +705,29 @@ impl Interpreter {
                         return r.map_err(|m| rterr(sp, m));
                     }
                 }
-                let r = match op {
-                    BinOp::Add => value::add(av, bv),
-                    BinOp::Sub => value::sub(av, bv),
-                    BinOp::Mul => value::mul(av, bv),
-                    BinOp::Div => value::div(av, bv),
-                    BinOp::Mod => value::rem(av, bv),
-                    BinOp::Eq => Ok(heap::bool_of(value::values_eq(av, bv))),
-                    BinOp::Ne => Ok(heap::bool_of(!value::values_eq(av, bv))),
-                    BinOp::Lt => value::compare(av, bv).map(|o| heap::bool_of(o == std::cmp::Ordering::Less)),
-                    BinOp::Le => value::compare(av, bv).map(|o| heap::bool_of(o != std::cmp::Ordering::Greater)),
-                    BinOp::Gt => value::compare(av, bv).map(|o| heap::bool_of(o == std::cmp::Ordering::Greater)),
-                    BinOp::Ge => value::compare(av, bv).map(|o| heap::bool_of(o != std::cmp::Ordering::Less)),
-                    BinOp::BAnd => value::band(av, bv),
-                    BinOp::BOr => value::bor(av, bv),
-                    BinOp::BXor => value::bxor(av, bv),
-                    BinOp::Shl => value::shl(av, bv),
-                    BinOp::Shr => value::shr(av, bv),
-                };
+                let r =
+                    match op {
+                        BinOp::Add => value::add(av, bv),
+                        BinOp::Sub => value::sub(av, bv),
+                        BinOp::Mul => value::mul(av, bv),
+                        BinOp::Div => value::div(av, bv),
+                        BinOp::Mod => value::rem(av, bv),
+                        BinOp::Eq => Ok(heap::bool_of(value::values_eq(av, bv))),
+                        BinOp::Ne => Ok(heap::bool_of(!value::values_eq(av, bv))),
+                        BinOp::Lt => value::compare(av, bv)
+                            .map(|o| heap::bool_of(o == std::cmp::Ordering::Less)),
+                        BinOp::Le => value::compare(av, bv)
+                            .map(|o| heap::bool_of(o != std::cmp::Ordering::Greater)),
+                        BinOp::Gt => value::compare(av, bv)
+                            .map(|o| heap::bool_of(o == std::cmp::Ordering::Greater)),
+                        BinOp::Ge => value::compare(av, bv)
+                            .map(|o| heap::bool_of(o != std::cmp::Ordering::Less)),
+                        BinOp::BAnd => value::band(av, bv),
+                        BinOp::BOr => value::bor(av, bv),
+                        BinOp::BXor => value::bxor(av, bv),
+                        BinOp::Shl => value::shl(av, bv),
+                        BinOp::Shr => value::shr(av, bv),
+                    };
                 r.map_err(|m| rterr(sp, m))
             }
             ExprKind::Logical(op, a, b) => {
@@ -750,7 +799,7 @@ impl Interpreter {
                         return Err(rterr(
                             sp,
                             format!("unknown struct \"{}\" (struct literal)", name),
-                        ))
+                        ));
                     }
                 };
                 let mut pairs: Vec<(String, V)> = Vec::with_capacity(fields.len());
@@ -765,7 +814,10 @@ impl Interpreter {
                 let (flow, v) = self.exec_match(subject, arms, env)?;
                 match flow {
                     Flow::None => Ok(v),
-                    _ => Err(rterr(sp, "break/continue/return cannot escape a match expression")),
+                    _ => Err(rterr(
+                        sp,
+                        "break/continue/return cannot escape a match expression",
+                    )),
                 }
             }
         }
@@ -845,7 +897,14 @@ impl Interpreter {
         }
     }
 
-    fn apply_assign_op(&self, op: AssignOp, old: V, rhs: V, sp: crate::token::Span, flags: u8) -> R<V> {
+    fn apply_assign_op(
+        &self,
+        op: AssignOp,
+        old: V,
+        rhs: V,
+        sp: crate::token::Span,
+        flags: u8,
+    ) -> R<V> {
         if flags & crate::ast::FLAG_STRICT_INT_ARITH != 0 {
             let bop = match op {
                 AssignOp::Add => BinOp::Add,
@@ -967,7 +1026,7 @@ impl Interpreter {
             let v = if let Some(t) = &p.ty {
                 match guard_typed(
                     v,
-                    guard_flags_of(&t.name),
+                    guard_flags_of_type(t),
                     &format!("argument \"{}\" of {}", p.name, def.name),
                 ) {
                     Ok(g) => g,
@@ -1008,7 +1067,7 @@ impl Interpreter {
                         Some(t) => {
                             match guard_typed(
                                 v,
-                                guard_flags_of(&t.name),
+                                guard_flags_of_type(t),
                                 &format!("return value of {}", def.name),
                             ) {
                                 Ok(g) => {
@@ -1161,8 +1220,12 @@ pub fn run_program(
     _base_dir: PathBuf,
     it: &mut Interpreter,
 ) -> Result<(), String> {
-    let stmts = crate::parser::parse_file(src)
-        .map_err(|e| format!("{}:{}:{}: syntax error: {}", name, e.span.line, e.span.col, e.msg))?;
+    let stmts = crate::parser::parse_file(src).map_err(|e| {
+        format!(
+            "{}:{}:{}: syntax error: {}",
+            name, e.span.line, e.span.col, e.msg
+        )
+    })?;
     let tinfo = crate::typecheck::check_program(&stmts)
         .map_err(|errs| crate::owncheck::format_errors(&errs, src, name))?;
     crate::owncheck::check_program(&stmts)
@@ -1177,6 +1240,7 @@ pub fn run_program(
 }
 
 /// one test function outcome (`test_*` at file top level)
+#[allow(dead_code)]
 pub struct TestOutcome {
     pub name: String,
     pub line: u32,
@@ -1191,8 +1255,12 @@ pub fn run_test_file(
     name: &str,
     it: &mut Interpreter,
 ) -> Result<Vec<TestOutcome>, String> {
-    let stmts = crate::parser::parse_file(src)
-        .map_err(|e| format!("{}:{}:{}: syntax error: {}", name, e.span.line, e.span.col, e.msg))?;
+    let stmts = crate::parser::parse_file(src).map_err(|e| {
+        format!(
+            "{}:{}:{}: syntax error: {}",
+            name, e.span.line, e.span.col, e.msg
+        )
+    })?;
     let tinfo = crate::typecheck::check_program(&stmts)
         .map_err(|errs| crate::owncheck::format_errors(&errs, src, name))?;
     crate::owncheck::check_program(&stmts)

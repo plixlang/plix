@@ -119,7 +119,7 @@ fn collect_in_stmt(s: &Stmt, out: &mut Vec<Rc<FuncDef>>) {
                 collect_in_expr(x, out);
             }
         }
-        StmtKind::Import { .. } | StmtKind::Break | StmtKind::Continue => {}
+        StmtKind::Enum { .. } | StmtKind::Import { .. } | StmtKind::Break | StmtKind::Continue => {}
     }
 }
 
@@ -256,8 +256,10 @@ fn collect_locals(
             StmtKind::MatchStmt { arms, .. } => {
                 for a in arms {
                     for p in &a.pats {
-                        if let Pattern::Ident(n) = p {
-                            add(n, seen, out, errors, a.span);
+                        let mut bs = Vec::new();
+                        pattern_binders(p, &mut bs);
+                        for n in bs {
+                            add(&n, seen, out, errors, a.span);
                         }
                     }
                     if let MatchBody::Block(b) = &a.body {
@@ -273,6 +275,18 @@ fn collect_locals(
 // ---------------------------------------------------------------------------
 // capture analysis
 // ---------------------------------------------------------------------------
+
+fn pattern_binders(p: &Pattern, out: &mut Vec<String>) {
+    match p {
+        Pattern::Ident(n) => out.push(n.clone()),
+        Pattern::Variant(_, args) => {
+            for a in args {
+                pattern_binders(a, out);
+            }
+        }
+        _ => {}
+    }
+}
 
 type Frames = Vec<(Option<usize>, HashSet<String>)>; // (fn_id or global, locals)
 
@@ -402,7 +416,10 @@ impl<'a> Cap<'a> {
                     self.walk_expr(x, frames, cur);
                 }
             }
-            StmtKind::Import { .. } | StmtKind::Break | StmtKind::Continue => {}
+            StmtKind::Enum { .. }
+            | StmtKind::Import { .. }
+            | StmtKind::Break
+            | StmtKind::Continue => {}
         }
     }
 
@@ -533,6 +550,13 @@ pub fn resolve_program_with_base(
             // a struct binds a runtime type-object under its name; traits are
             // compile-time entities (no slot)
             StmtKind::Struct { name, .. } => user_globals.push(name.clone()),
+            StmtKind::Enum { variants, .. } => {
+                for v in variants {
+                    if v.fields.is_empty() {
+                        user_globals.push(v.name.clone());
+                    }
+                }
+            }
             StmtKind::Import {
                 module,
                 alias,
@@ -599,7 +623,10 @@ pub fn resolve_program_with_base(
     for (j, n) in user_globals.iter().enumerate() {
         if globals.contains_key(n) {
             errors.push(ResErr {
-                msg: format!("global \"{}\" collides with a builtin or is declared twice", n),
+                msg: format!(
+                    "global \"{}\" collides with a builtin or is declared twice",
+                    n
+                ),
                 line: 0,
                 col: 0,
             });
@@ -651,6 +678,14 @@ fn enforce_top_level_items(stmts: &[Stmt], errors: &mut Vec<ResErr>) {
                 StmtKind::Trait { name, .. } if depth > 0 => errors.push(ResErr {
                     msg: format!(
                         "trait \"{}\" must be declared at the top level",
+                        name
+                    ),
+                    line: s.span.line,
+                    col: s.span.col,
+                }),
+                StmtKind::Enum { name, .. } if depth > 0 => errors.push(ResErr {
+                    msg: format!(
+                        "enum \"{}\" must be declared at the top level",
                         name
                     ),
                     line: s.span.line,
@@ -723,9 +758,7 @@ fn collect_main_locals(
     ) {
         for s in stmts {
             match &s.node {
-                StmtKind::Var { name, .. } if depth > 0 => {
-                    add(name, seen, out, errors, s.span)
-                }
+                StmtKind::Var { name, .. } if depth > 0 => add(name, seen, out, errors, s.span),
                 StmtKind::Func(f) => {
                     if depth > 0 {
                         add(&f.name, seen, out, errors, s.span);
@@ -761,8 +794,10 @@ fn collect_main_locals(
                 StmtKind::MatchStmt { arms, .. } => {
                     for a in arms {
                         for p in &a.pats {
-                            if let Pattern::Ident(n) = p {
-                                add(n, seen, out, errors, a.span);
+                            let mut bs = Vec::new();
+                            pattern_binders(p, &mut bs);
+                            for n in bs {
+                                add(&n, seen, out, errors, a.span);
                             }
                         }
                         if let MatchBody::Block(b) = &a.body {

@@ -20,7 +20,6 @@ pub enum G {
     C(&'static str, f64),
 }
 
-
 pub static GLOBAL_DEFS: &[G] = &[
     G::C("PI", std::f64::consts::PI),
     G::C("E", std::f64::consts::E),
@@ -38,6 +37,10 @@ pub static GLOBAL_DEFS: &[G] = &[
     G::F("float", b_float),
     G::F("bool", b_bool),
     G::F("type_of", b_type_of),
+    // ---- option/result constructors ----
+    G::F("Some", b_some),
+    G::F("Ok", b_ok),
+    G::F("Err", b_err),
     // ---- numbers ----
     G::F("abs", b_abs),
     G::F("floor", b_floor),
@@ -102,6 +105,8 @@ pub static GLOBAL_DEFS: &[G] = &[
     G::F("clock", b_clock),
     G::F("sleep_ms", b_sleep_ms),
     G::F("assert", b_assert),
+    G::F("assert_eq", b_assert_eq),
+    G::F("assert_ne", b_assert_ne),
     G::F("panic", b_panic),
     G::F("exit", b_exit),
     // ---- fs module ----
@@ -344,7 +349,12 @@ fn err<T>(m: impl Into<String>) -> Result<T, String> {
 
 fn need(args: &[V], n: usize, name: &str) -> Result<(), String> {
     if args.len() < n {
-        err(format!("{}: expected {} argument(s), got {}", name, n, args.len()))
+        err(format!(
+            "{}: expected {} argument(s), got {}",
+            name,
+            n,
+            args.len()
+        ))
     } else {
         Ok(())
     }
@@ -521,6 +531,24 @@ fn b_type_of(_c: &mut dyn Caller, args: &[V]) -> OpResult {
     Ok(mk_str_from(kind_name(args[0])))
 }
 
+fn b_some(_c: &mut dyn Caller, args: &[V]) -> OpResult {
+    need(args, 1, "Some")?;
+    if is_null(args[0]) {
+        return err("Some: payload cannot be null");
+    }
+    Ok(args[0])
+}
+
+fn b_ok(_c: &mut dyn Caller, args: &[V]) -> OpResult {
+    need(args, 1, "Ok")?;
+    Ok(mk_variant("Ok", args[0], true))
+}
+
+fn b_err(_c: &mut dyn Caller, args: &[V]) -> OpResult {
+    need(args, 1, "Err")?;
+    Ok(mk_variant("Err", args[0], true))
+}
+
 // ---------------------------------------------------------------------------
 // numbers
 // ---------------------------------------------------------------------------
@@ -623,7 +651,9 @@ fn b_clamp(_c: &mut dyn Caller, args: &[V]) -> OpResult {
         want_num(args[2], "clamp")?,
     );
     if is_int(args[0]) && is_int(args[1]) && is_int(args[2]) {
-        return Ok(mk_int(as_int(args[0]).clamp(as_int(args[1]), as_int(args[2]))));
+        return Ok(mk_int(
+            as_int(args[0]).clamp(as_int(args[1]), as_int(args[2])),
+        ));
     }
     Ok(mk_float_unchecked(x.clamp(lo, hi)))
 }
@@ -666,7 +696,10 @@ fn b_rand(_c: &mut dyn Caller, _args: &[V]) -> OpResult {
 }
 fn b_rand_int(_c: &mut dyn Caller, args: &[V]) -> OpResult {
     need(args, 2, "rand_int")?;
-    let (a, b) = (want_int(args[0], "rand_int")?, want_int(args[1], "rand_int")?);
+    let (a, b) = (
+        want_int(args[0], "rand_int")?,
+        want_int(args[1], "rand_int")?,
+    );
     if b < a {
         return err("rand_int: max < min");
     }
@@ -726,7 +759,9 @@ fn b_contains(_c: &mut dyn Caller, args: &[V]) -> OpResult {
             match payload(args[0]) {
                 HeapObj::Str(s) => return Ok(bool_of(s.contains(&want_str(args[1], "contains")?))),
                 HeapObj::Array(items) => {
-                    return Ok(bool_of(items.iter().any(|&x| crate::value::values_eq(x, args[1]))))
+                    return Ok(bool_of(
+                        items.iter().any(|&x| crate::value::values_eq(x, args[1])),
+                    ))
                 }
                 HeapObj::Map(m) => {
                     let key = to_display(args[1]);
@@ -893,9 +928,7 @@ fn b_reverse(_c: &mut dyn Caller, args: &[V]) -> OpResult {
 fn b_sort(_c: &mut dyn Caller, args: &[V]) -> OpResult {
     need(args, 1, "sort")?;
     let mut items = want_arr(args[0], "sort")?;
-    items.sort_by(|&a, &b| {
-        crate::value::compare(a, b).unwrap_or(std::cmp::Ordering::Equal)
-    });
+    items.sort_by(|&a, &b| crate::value::compare(a, b).unwrap_or(std::cmp::Ordering::Equal));
     Ok(mk_array(items))
 }
 fn b_sort_by(c: &mut dyn Caller, args: &[V]) -> OpResult {
@@ -997,7 +1030,11 @@ fn b_range(_c: &mut dyn Caller, args: &[V]) -> OpResult {
     Ok(mk_array(out))
 }
 
-fn map_with<R>(v: V, name: &str, f: impl FnOnce(&std::collections::HashMap<String, V>) -> R) -> Result<R, String> {
+fn map_with<R>(
+    v: V,
+    name: &str,
+    f: impl FnOnce(&std::collections::HashMap<String, V>) -> R,
+) -> Result<R, String> {
     unsafe {
         if is_ptr(v) {
             if let HeapObj::Map(m) = payload(v) {
@@ -1105,6 +1142,24 @@ fn b_assert(_c: &mut dyn Caller, args: &[V]) -> OpResult {
     }
     Ok(NULL)
 }
+fn b_assert_eq(_c: &mut dyn Caller, args: &[V]) -> OpResult {
+    need(args, 2, "assert_eq")?;
+    if !crate::value::values_eq(args[0], args[1]) {
+        return err(format!(
+            "assert_eq failed: left={}, right={}",
+            to_repr(args[0]),
+            to_repr(args[1])
+        ));
+    }
+    Ok(NULL)
+}
+fn b_assert_ne(_c: &mut dyn Caller, args: &[V]) -> OpResult {
+    need(args, 2, "assert_ne")?;
+    if crate::value::values_eq(args[0], args[1]) {
+        return err(format!("assert_ne failed: both={}", to_repr(args[0])));
+    }
+    Ok(NULL)
+}
 fn b_panic(_c: &mut dyn Caller, args: &[V]) -> OpResult {
     let msg = if args.is_empty() {
         "panic".to_string()
@@ -1160,15 +1215,21 @@ fn fs_append(_c: &mut dyn Caller, args: &[V]) -> OpResult {
 }
 fn fs_exists(_c: &mut dyn Caller, args: &[V]) -> OpResult {
     need(args, 1, "fs.exists")?;
-    Ok(bool_of(std::path::Path::new(&want_str(args[0], "fs.exists")?).exists()))
+    Ok(bool_of(
+        std::path::Path::new(&want_str(args[0], "fs.exists")?).exists(),
+    ))
 }
 fn fs_is_file(_c: &mut dyn Caller, args: &[V]) -> OpResult {
     need(args, 1, "fs.is_file")?;
-    Ok(bool_of(std::path::Path::new(&want_str(args[0], "fs.is_file")?).is_file()))
+    Ok(bool_of(
+        std::path::Path::new(&want_str(args[0], "fs.is_file")?).is_file(),
+    ))
 }
 fn fs_is_dir(_c: &mut dyn Caller, args: &[V]) -> OpResult {
     need(args, 1, "fs.is_dir")?;
-    Ok(bool_of(std::path::Path::new(&want_str(args[0], "fs.is_dir")?).is_dir()))
+    Ok(bool_of(
+        std::path::Path::new(&want_str(args[0], "fs.is_dir")?).is_dir(),
+    ))
 }
 fn fs_size(_c: &mut dyn Caller, args: &[V]) -> OpResult {
     need(args, 1, "fs.size")?;
@@ -1215,16 +1276,22 @@ fn fs_rename(_c: &mut dyn Caller, args: &[V]) -> OpResult {
 }
 fn fs_copy(_c: &mut dyn Caller, args: &[V]) -> OpResult {
     need(args, 2, "fs.copy")?;
-    std::fs::copy(&want_str(args[0], "fs.copy")?, &want_str(args[1], "fs.copy")?)
-        .map(|_| bool_of(true))
-        .map_err(|e| ioerr("copy", e))
+    std::fs::copy(
+        &want_str(args[0], "fs.copy")?,
+        &want_str(args[1], "fs.copy")?,
+    )
+    .map(|_| bool_of(true))
+    .map_err(|e| ioerr("copy", e))
 }
 fn fs_join(_c: &mut dyn Caller, args: &[V]) -> OpResult {
     need(args, 2, "fs.join")?;
     let a = want_str(args[0], "fs.join")?;
     let b = want_str(args[1], "fs.join")?;
     Ok(mk_string(
-        std::path::Path::new(&a).join(&b).to_string_lossy().into_owned(),
+        std::path::Path::new(&a)
+            .join(&b)
+            .to_string_lossy()
+            .into_owned(),
     ))
 }
 fn fs_abs(_c: &mut dyn Caller, args: &[V]) -> OpResult {
@@ -1324,11 +1391,16 @@ fn sys_exec(_c: &mut dyn Caller, args: &[V]) -> OpResult {
                     if argv.is_empty() {
                         return err("sys.exec: empty command array");
                     }
-                    std::process::Command::new(&argv[0]).args(&argv[1..]).output()
+                    std::process::Command::new(&argv[0])
+                        .args(&argv[1..])
+                        .output()
                 }
                 _ => {
                     let cmd = to_display(args[0]);
-                    std::process::Command::new("sh").arg("-c").arg(&cmd).output()
+                    std::process::Command::new("sh")
+                        .arg("-c")
+                        .arg(&cmd)
+                        .output()
                 }
             }
         }
@@ -1336,7 +1408,10 @@ fn sys_exec(_c: &mut dyn Caller, args: &[V]) -> OpResult {
     match out {
         Ok(o) => {
             let mut m = std::collections::HashMap::new();
-            m.insert("code".to_string(), mk_int(o.status.code().unwrap_or(-1) as i64));
+            m.insert(
+                "code".to_string(),
+                mk_int(o.status.code().unwrap_or(-1) as i64),
+            );
             m.insert(
                 "stdout".to_string(),
                 mk_string(String::from_utf8_lossy(&o.stdout).into_owned()),
@@ -1442,8 +1517,7 @@ fn ai_shape(_c: &mut dyn Caller, args: &[V]) -> OpResult {
         Ok(v) => crate::pyffi::to_plix_deep(v),
         Err(_) => {
             // plain plix array: shape is just the length
-            crate::value::length(args[0])
-                .map(|n| mk_array(vec![n]))
+            crate::value::length(args[0]).map(|n| mk_array(vec![n]))
         }
     }
 }
@@ -1456,7 +1530,10 @@ fn forge_version(_c: &mut dyn Caller, _args: &[V]) -> OpResult {
     Ok(mk_str_from("plix 0.2.0 (rust runtime)"))
 }
 fn forge_rust_version(_c: &mut dyn Caller, _args: &[V]) -> OpResult {
-    match std::process::Command::new("rustc").arg("--version").output() {
+    match std::process::Command::new("rustc")
+        .arg("--version")
+        .output()
+    {
         Ok(o) if !o.stdout.is_empty() => Ok(mk_string(
             String::from_utf8_lossy(&o.stdout).trim().to_string(),
         )),
@@ -1479,7 +1556,10 @@ fn forge_cargo(_c: &mut dyn Caller, args: &[V]) -> OpResult {
     match std::process::Command::new("cargo").args(&argv).output() {
         Ok(o) => {
             let mut m = std::collections::HashMap::new();
-            m.insert("code".to_string(), mk_int(o.status.code().unwrap_or(-1) as i64));
+            m.insert(
+                "code".to_string(),
+                mk_int(o.status.code().unwrap_or(-1) as i64),
+            );
             m.insert(
                 "stdout".to_string(),
                 mk_string(String::from_utf8_lossy(&o.stdout).into_owned()),

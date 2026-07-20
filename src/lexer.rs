@@ -6,7 +6,7 @@
 //! ${expr}; r"..." raw strings (no escapes, no interpolation).
 //! Comments: // line and /* ... */ block.
 
-use crate::token::{keyword, StrPart, Tok, Token};
+use crate::token::{StrPart, Tok, Token, keyword};
 
 pub struct LexError {
     pub msg: String,
@@ -409,8 +409,9 @@ impl<'a> Lexer<'a> {
                             let h1 = self.bump();
                             let h2 = self.bump();
                             let s = format!("{}{}", h1 as char, h2 as char);
-                            let v = u8::from_str_radix(&s, 16)
-                                .map_err(|_| LexError::new("bad \\xNN escape", self.line, self.col))?;
+                            let v = u8::from_str_radix(&s, 16).map_err(|_| {
+                                LexError::new("bad \\xNN escape", self.line, self.col)
+                            })?;
                             cur.push(v as char);
                         }
                         _ => return self.err(format!("unknown escape \\{}", e as char)),

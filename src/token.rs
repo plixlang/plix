@@ -39,6 +39,7 @@ pub enum Tok {
     StructKw,
     ImplKw,
     TraitKw,
+    EnumKw,
 
     // punctuation
     LParen,
@@ -137,7 +138,7 @@ pub fn keyword(s: &str) -> Option<Tok> {
         "continue" => Tok::Continue,
         "true" => Tok::True,
         "false" => Tok::False,
-        "null" => Tok::NullKw,
+        "null" | "None" => Tok::NullKw,
         "import" => Tok::Import,
         "as" => Tok::As,
         "py" => Tok::PyKw,
@@ -147,6 +148,7 @@ pub fn keyword(s: &str) -> Option<Tok> {
         "struct" => Tok::StructKw,
         "impl" => Tok::ImplKw,
         "trait" => Tok::TraitKw,
+        "enum" => Tok::EnumKw,
         _ => return None,
     })
 }

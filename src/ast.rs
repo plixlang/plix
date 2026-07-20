@@ -36,6 +36,9 @@ pub const FLAG_STRICT_INT_ARITH: u8 = 1;
 pub const FLAG_GUARD_INT: u8 = 1 << 1;
 pub const FLAG_GUARD_FLOAT: u8 = 1 << 2;
 pub const FLAG_GUARD_BOOL: u8 = 1 << 3;
+/// typed-slot guard modifier: `T?` / `Option<T>` accepts `null` in addition
+/// to the inner guard. For example, an `int?` slot accepts `null` or `int`.
+pub const FLAG_GUARD_NULLABLE: u8 = 1 << 4;
 
 pub type Expr = Node<ExprKind>;
 pub type Stmt = Node<StmtKind>;
@@ -106,20 +109,37 @@ pub enum ExprKind {
     Object(Vec<(String, Expr)>),
     Unary(UnOp, Box<Expr>),
     /// `&x` / `&mut x` — ownership borrow (validated by the ownership checker)
-    Borrow { mutable: bool, expr: Box<Expr> },
+    Borrow {
+        mutable: bool,
+        expr: Box<Expr>,
+    },
     Binary(BinOp, Box<Expr>, Box<Expr>),
     Logical(LogicalOp, Box<Expr>, Box<Expr>),
     Ternary(Box<Expr>, Box<Expr>, Box<Expr>),
-    Assign { target: AssignTarget, op: AssignOp, value: Box<Expr> },
+    Assign {
+        target: AssignTarget,
+        op: AssignOp,
+        value: Box<Expr>,
+    },
     Call(Box<Expr>, Vec<Expr>),
     Index(Box<Expr>, Box<Expr>),
-    Slice { obj: Box<Expr>, start: Option<Box<Expr>>, end: Option<Box<Expr>> },
+    Slice {
+        obj: Box<Expr>,
+        start: Option<Box<Expr>>,
+        end: Option<Box<Expr>>,
+    },
     Member(Box<Expr>, String),
     FuncLit(Rc<FuncDef>),
     /// match as an expression (arms produce values with `=> expr`)
-    Match { subject: Box<Expr>, arms: Vec<MatchArm> },
+    Match {
+        subject: Box<Expr>,
+        arms: Vec<MatchArm>,
+    },
     /// struct literal: `Point { x: 1.0, y: 2.0 }`
-    StructLit { name: String, fields: Vec<(String, Expr)> },
+    StructLit {
+        name: String,
+        fields: Vec<(String, Expr)>,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -155,6 +175,9 @@ pub enum Pattern {
     Str(String),
     /// binds the subject into a new variable
     Ident(String),
+    /// enum/option/result constructor pattern: `Some(x)`, `Ok(v)`, `Err(e)`,
+    /// or a nullary enum-style variant such as `Red`.
+    Variant(String, Vec<Pattern>),
     Wildcard,
 }
 
@@ -216,21 +239,60 @@ pub struct FieldDef {
 }
 
 #[derive(Debug, Clone)]
+pub struct EnumVariantDef {
+    pub name: String,
+    pub fields: Vec<TypeExpr>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
 pub enum StmtKind {
-    Var { kind: VarKind, name: String, value: Box<Expr>, ty: Option<TypeExpr> },
+    Var {
+        kind: VarKind,
+        name: String,
+        value: Box<Expr>,
+        ty: Option<TypeExpr>,
+    },
     Func(Rc<FuncDef>),
     /// import "path.px" | import py "numpy" | import "fs"  (with optional `as`)
-    Import { module: String, alias: String, python: bool },
+    Import {
+        module: String,
+        alias: String,
+        python: bool,
+    },
     /// struct Point { x: float, y: float }
-    Struct { name: String, fields: Vec<FieldDef> },
+    Struct {
+        name: String,
+        fields: Vec<FieldDef>,
+    },
     /// impl Point { ... }  |  impl Shape for Point { ... }
-    Impl { target: String, trait_name: Option<String>, methods: Vec<Rc<FuncDef>> },
+    Impl {
+        target: String,
+        trait_name: Option<String>,
+        methods: Vec<Rc<FuncDef>>,
+    },
     /// trait Shape { func area(&self) -> float;  func name(&self) { default } }
-    Trait { name: String, methods: Vec<Rc<FuncDef>> },
+    Trait {
+        name: String,
+        methods: Vec<Rc<FuncDef>>,
+    },
+    /// enum Color { Red, Green } (payload variants are parsed for the checker;
+    /// runtime construction for payload sums is provided by built-in Result.)
+    Enum {
+        name: String,
+        variants: Vec<EnumVariantDef>,
+    },
     ExprStmt(Box<Expr>),
     Block(Vec<Stmt>),
-    If { cond: Box<Expr>, then: Box<Stmt>, els: Option<Box<Stmt>> },
-    While { cond: Box<Expr>, body: Box<Stmt> },
+    If {
+        cond: Box<Expr>,
+        then: Box<Stmt>,
+        els: Option<Box<Stmt>>,
+    },
+    While {
+        cond: Box<Expr>,
+        body: Box<Stmt>,
+    },
     /// C-style for
     ForC {
         init: Option<Box<Stmt>>,
@@ -238,8 +300,16 @@ pub enum StmtKind {
         step: Option<Expr>,
         body: Box<Stmt>,
     },
-    ForIn { name: String, iter: Box<Expr>, body: Box<Stmt>, ty: Option<TypeExpr> },
-    MatchStmt { subject: Box<Expr>, arms: Vec<MatchArm> },
+    ForIn {
+        name: String,
+        iter: Box<Expr>,
+        body: Box<Stmt>,
+        ty: Option<TypeExpr>,
+    },
+    MatchStmt {
+        subject: Box<Expr>,
+        arms: Vec<MatchArm>,
+    },
     Return(Option<Box<Expr>>),
     Break,
     Continue,

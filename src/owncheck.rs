@@ -86,7 +86,12 @@ pub fn format_errors(errs: &[OwnError], src: &str, file: &str) -> String {
             e.code, e.msg, file, e.span.line, e.span.col
         ));
         if let Some(line) = lines.get((e.span.line - 1) as usize) {
-            out.push_str(&format!("   |\n{:3}| {}\n   | {}^\n", e.span.line, line, " ".repeat((e.span.col - 1) as usize)));
+            out.push_str(&format!(
+                "   |\n{:3}| {}\n   | {}^\n",
+                e.span.line,
+                line,
+                " ".repeat((e.span.col - 1) as usize)
+            ));
         }
         for (n, sp) in &e.notes {
             out.push_str(&format!("   = note: {} (at {}:{})\n", n, sp.line, sp.col));
@@ -95,9 +100,7 @@ pub fn format_errors(errs: &[OwnError], src: &str, file: &str) -> String {
     out
 }
 
-fn snapshot(
-    scopes: &[std::collections::HashMap<String, Var>],
-) -> Vec<(String, St)> {
+fn snapshot(scopes: &[std::collections::HashMap<String, Var>]) -> Vec<(String, St)> {
     let mut out = Vec::new();
     for m in scopes {
         for (k, v) in m {
@@ -105,6 +108,18 @@ fn snapshot(
         }
     }
     out
+}
+
+fn pattern_binders(p: &Pattern, out: &mut Vec<String>) {
+    match p {
+        Pattern::Ident(n) => out.push(n.clone()),
+        Pattern::Variant(_, args) => {
+            for a in args {
+                pattern_binders(a, out);
+            }
+        }
+        _ => {}
+    }
 }
 
 impl Ctx {
@@ -178,10 +193,7 @@ impl Ctx {
             St::MBorrow if !copy => {
                 self.errors.push(OwnError {
                     code: "E0502",
-                    msg: format!(
-                        "cannot use \"{}\" while it is mutably borrowed",
-                        name
-                    ),
+                    msg: format!("cannot use \"{}\" while it is mutably borrowed", name),
                     span: sp,
                     notes: vec![],
                 });
@@ -235,10 +247,7 @@ impl Ctx {
             St::MBorrow => {
                 self.errors.push(OwnError {
                     code: "E0503",
-                    msg: format!(
-                        "cannot move \"{}\" because it is mutably borrowed",
-                        name
-                    ),
+                    msg: format!("cannot move \"{}\" because it is mutably borrowed", name),
                     span: sp,
                     notes: vec![],
                 });
@@ -394,7 +403,9 @@ impl Ctx {
 
     fn stmt_inner(&mut self, s: &Stmt) -> bool {
         match &s.node {
-            StmtKind::Var { kind, name, value, .. } => {
+            StmtKind::Var {
+                kind, name, value, ..
+            } => {
                 let copy = self.is_copy_expr(value);
                 self.expr_moves_context(value, matches!(kind, VarKind::Own));
                 self.declare(
@@ -424,6 +435,7 @@ impl Ctx {
                     self.check_fn(m);
                 }
             }
+            StmtKind::Enum { .. } => {}
             StmtKind::Import { .. } => {}
             StmtKind::ExprStmt(e) => self.expr(e),
             StmtKind::Block(stmts) => {
@@ -484,14 +496,19 @@ impl Ctx {
                 self.loop_body(body);
                 self.pop_scope();
             }
-            StmtKind::ForIn { name, iter, body, .. } => {
+            StmtKind::ForIn {
+                name, iter, body, ..
+            } => {
                 // `for (x in own_arr)` moves; `for (x in &own_arr)` borrows
                 match &iter.node {
                     ExprKind::Borrow { mutable, expr } => {
                         self.borrow_target(*mutable, expr);
                     }
                     ExprKind::Ident(n) => {
-                        if self.lookup_idx(n).map(|(_, v)| v.k == K::Own && !v.copy).unwrap_or(false)
+                        if self
+                            .lookup_idx(n)
+                            .map(|(_, v)| v.k == K::Own && !v.copy)
+                            .unwrap_or(false)
                         {
                             self.move_var(n, iter.span);
                         } else {
@@ -510,8 +527,10 @@ impl Ctx {
                 for arm in arms {
                     self.push_scope();
                     for p in &arm.pats {
-                        if let Pattern::Ident(n) = p {
-                            self.declare(n, K::Auto, false, arm.span);
+                        let mut bs = Vec::new();
+                        pattern_binders(p, &mut bs);
+                        for n in bs {
+                            self.declare(&n, K::Auto, false, arm.span);
                         }
                     }
                     match &arm.body {
@@ -532,7 +551,10 @@ impl Ctx {
                 if let Some(e) = v {
                     // returning an owned binding moves it — always allowed
                     if let ExprKind::Ident(n) = &e.node {
-                        if self.lookup_idx(n).map(|(_, v)| v.k == K::Own && !v.copy).unwrap_or(false)
+                        if self
+                            .lookup_idx(n)
+                            .map(|(_, v)| v.k == K::Own && !v.copy)
+                            .unwrap_or(false)
                         {
                             self.move_var(n, e.span);
                             self.reset_borrows();
@@ -566,8 +588,8 @@ impl Ctx {
                 continue;
             }
             match header_state.get(name) {
-                Some(St::Moved) => continue,   // moved before the loop: fine
-                None => continue,              // declared inside the loop
+                Some(St::Moved) => continue, // moved before the loop: fine
+                None => continue,            // declared inside the loop
                 _ => {}
             }
             let flagged = match self.get_mut(name) {
@@ -797,8 +819,10 @@ impl Ctx {
                 for arm in arms {
                     self.push_scope();
                     for p in &arm.pats {
-                        if let Pattern::Ident(n) = p {
-                            self.declare(n, K::Auto, false, arm.span);
+                        let mut bs = Vec::new();
+                        pattern_binders(p, &mut bs);
+                        for n in bs {
+                            self.declare(&n, K::Auto, false, arm.span);
                         }
                     }
                     match &arm.body {
@@ -822,11 +846,7 @@ impl Ctx {
 }
 
 /// three-way branch merge: base (before), a (then), b (else)
-fn merge(
-    base: &[(String, St)],
-    a: &[(String, St)],
-    b: &[(String, St)],
-) -> Vec<(String, St)> {
+fn merge(base: &[(String, St)], a: &[(String, St)], b: &[(String, St)]) -> Vec<(String, St)> {
     let mut out = Vec::new();
     for (name, base_st) in base {
         let sa = a.iter().find(|(n, _)| n == name).map(|(_, s)| *s);

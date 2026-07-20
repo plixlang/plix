@@ -6,7 +6,7 @@ identifiers are `[A-Za-z_][A-Za-z0-9_]*`. New in v0.3: type annotations,
 
 ```
 program        := { top_item }
-top_item       := import_stmt | func_decl | struct_decl | impl_block
+top_item       := import_stmt | func_decl | struct_decl | enum_decl | impl_block
                |  trait_decl | var_decl | statement
 
 import_stmt    := "import" string ["as" ident] ";"            (* user .px or native stdlib *)
@@ -26,6 +26,12 @@ receiver       := "&" "self" | "&mut" "self" | "self"   (* methods only;
 
 struct_decl    := "struct" ident "{" field {"," field} [","] "}"
 field          := ident [":" type] ["=" expr]
+
+enum_decl      := "enum" ident ["<" ident {"," ident} ">"]
+                  "{" enum_variant {"," enum_variant} [","] "}"
+enum_variant   := ident ["(" type {"," type} ")"]
+                  (* nullary variants are fully supported; payload sums are
+                     represented today by built-in Option/Result constructors *)
 
 impl_block     := "impl" ident ["for" ident] "{" {func_decl} "}"
                       (* impl S              → inherent items

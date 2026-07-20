@@ -39,6 +39,11 @@ pub enum Ty {
     Bool,
     Arr(Box<Ty>),
     Map(Box<Ty>, Box<Ty>),
+    /// Nullable/Option type: `T?` or `Option<T>` accepts either `null` or `T`.
+    Option(Box<Ty>),
+    /// Built-in `Result<T, E>` sum type (`Ok(T)` | `Err(E)`).
+    Result(Box<Ty>, Box<Ty>),
+    Enum(String),
     Func(Rc<FnSig>),
     Struct(String),
     Trait(String),
@@ -57,6 +62,24 @@ pub fn ty_name(t: &Ty) -> String {
         Ty::Bool => "bool".into(),
         Ty::Arr(e) => format!("array<{}>", ty_name(e)),
         Ty::Map(k, v) => format!("map<{}, {}>", ty_name(k), ty_name(v)),
+        Ty::Option(inner) => format!("{}?", ty_name(inner)),
+        Ty::Result(ok, err) => format!("Result<{}, {}>", ty_name(ok), ty_name(err)),
+        Ty::Enum(n) => n.clone(),
+        Ty::Func(sig) if sig.ret.is_some() || sig.params.iter().any(|p| p.is_some()) => {
+            let ps: Vec<String> = sig
+                .params
+                .iter()
+                .map(|p| p.as_ref().map(ty_name).unwrap_or_else(|| "any".into()))
+                .collect();
+            format!(
+                "({}) -> {}",
+                ps.join(", "),
+                sig.ret
+                    .as_ref()
+                    .map(ty_name)
+                    .unwrap_or_else(|| "any".into())
+            )
+        }
         Ty::Func(_) => "func".into(),
         Ty::Struct(n) => n.clone(),
         Ty::Trait(n) => n.clone(),
@@ -117,9 +140,16 @@ pub struct TraitMeta {
 }
 
 #[derive(Debug, Clone, Default)]
+pub struct EnumMeta {
+    pub variants: HashMap<String, Vec<Ty>>,
+    pub order: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default)]
 pub struct TypeInfo {
     pub structs: HashMap<String, StructMeta>,
     pub traits: HashMap<String, TraitMeta>,
+    pub enums: HashMap<String, EnumMeta>,
     /// signature of every function literal / declaration / method by id
     pub fn_sigs: HashMap<usize, FnSig>,
     /// unit-level (depth 0) functions by name
@@ -205,16 +235,49 @@ impl Ck {
                 no_args(self, "bool");
                 Ty::Bool
             }
-            "func" => Ty::Func(Rc::new(FnSig::default())),
+            "func" => {
+                if te.args.is_empty() {
+                    Ty::Func(Rc::new(FnSig::default()))
+                } else {
+                    // Function type syntax `(A, B) -> R` is encoded by the
+                    // parser as `func<A, B, R>` with the final arg as return.
+                    let mut params: Vec<Option<Ty>> = Vec::new();
+                    for a in &te.args[..te.args.len().saturating_sub(1)] {
+                        params.push(Some(self.lower_ty(a)));
+                    }
+                    let ret = te.args.last().map(|r| self.lower_ty(r));
+                    Ty::Func(Rc::new(FnSig {
+                        params,
+                        rest: false,
+                        defaults: 0,
+                        ret,
+                    }))
+                }
+            }
+            "Option" | "option" => {
+                if te.args.len() != 1 {
+                    self.e(terr("E0107", "Option takes exactly one type argument", s));
+                    Ty::Option(Box::new(Ty::Any))
+                } else {
+                    Ty::Option(Box::new(self.lower_ty(&te.args[0])))
+                }
+            }
+            "Result" | "result" => {
+                if te.args.len() != 2 {
+                    self.e(terr("E0107", "Result takes exactly two type arguments", s));
+                    Ty::Result(Box::new(Ty::Any), Box::new(Ty::Any))
+                } else {
+                    Ty::Result(
+                        Box::new(self.lower_ty(&te.args[0])),
+                        Box::new(self.lower_ty(&te.args[1])),
+                    )
+                }
+            }
             "array" => {
                 if te.args.len() > 1 {
                     self.e(terr("E0107", "array takes at most one type argument", s));
                 }
-                let el = te
-                    .args
-                    .first()
-                    .map(|a| self.lower_ty(a))
-                    .unwrap_or(Ty::Any);
+                let el = te.args.first().map(|a| self.lower_ty(a)).unwrap_or(Ty::Any);
                 Ty::Arr(Box::new(el))
             }
             "map" => {
@@ -238,6 +301,8 @@ impl Ck {
                     Ty::Struct(name.to_string())
                 } else if self.info.traits.contains_key(name) {
                     Ty::Trait(name.to_string())
+                } else if self.info.enums.contains_key(name) {
+                    Ty::Enum(name.to_string())
                 } else {
                     self.e(terr(
                         "E0412",
@@ -322,7 +387,10 @@ pub fn check_program(stmts: &[Stmt]) -> CResult {
         if ck.info.structs.contains_key(&name) || ck.info.traits.contains_key(&name) {
             ck.e(terr(
                 "E0428",
-                format!("the name \"{}\" is defined multiple times (type and function)", name),
+                format!(
+                    "the name \"{}\" is defined multiple times (type and function)",
+                    name
+                ),
                 span,
             ));
         }
@@ -359,7 +427,10 @@ fn declare_structs_traits(ck: &mut Ck, stmts: &[Stmt]) {
     for s in stmts {
         match &s.node {
             StmtKind::Struct { name, .. } => {
-                if ck.info.structs.contains_key(name) || ck.info.traits.contains_key(name) {
+                if ck.info.structs.contains_key(name)
+                    || ck.info.traits.contains_key(name)
+                    || ck.info.enums.contains_key(name)
+                {
                     ck.e(terr(
                         "E0428",
                         format!("the name \"{}\" is defined multiple times", name),
@@ -370,7 +441,10 @@ fn declare_structs_traits(ck: &mut Ck, stmts: &[Stmt]) {
                 }
             }
             StmtKind::Trait { name, .. } => {
-                if ck.info.structs.contains_key(name) || ck.info.traits.contains_key(name) {
+                if ck.info.structs.contains_key(name)
+                    || ck.info.traits.contains_key(name)
+                    || ck.info.enums.contains_key(name)
+                {
                     ck.e(terr(
                         "E0428",
                         format!("the name \"{}\" is defined multiple times", name),
@@ -378,6 +452,36 @@ fn declare_structs_traits(ck: &mut Ck, stmts: &[Stmt]) {
                     ));
                 } else {
                     ck.info.traits.insert(name.clone(), TraitMeta::default());
+                }
+            }
+            StmtKind::Enum { name, variants } => {
+                if ck.info.structs.contains_key(name)
+                    || ck.info.traits.contains_key(name)
+                    || ck.info.enums.contains_key(name)
+                {
+                    ck.e(terr(
+                        "E0428",
+                        format!("the name \"{}\" is defined multiple times", name),
+                        s.span,
+                    ));
+                } else {
+                    let mut em = EnumMeta::default();
+                    for v in variants {
+                        let fields: Vec<Ty> = v.fields.iter().map(|_| Ty::Any).collect();
+                        if !fields.is_empty() {
+                            ck.e(terr(
+                                "E0658",
+                                format!(
+                                    "payload enum variant {} is experimental; use built-in Result<T,E> / Ok(v) / Err(e) for now",
+                                    v.name
+                                ),
+                                v.span,
+                            ));
+                        }
+                        em.order.push(v.name.clone());
+                        em.variants.insert(v.name.clone(), fields);
+                    }
+                    ck.info.enums.insert(name.clone(), em);
                 }
             }
             _ => {}
@@ -394,7 +498,10 @@ fn fill_struct_fields(ck: &mut Ck, stmts: &[Stmt]) {
                 if sm.fields.contains_key(&f.name) {
                     ck.e(terr(
                         "E0124",
-                        format!("field \"{}\" is already declared in struct {}", f.name, name),
+                        format!(
+                            "field \"{}\" is already declared in struct {}",
+                            f.name, name
+                        ),
                         f.span,
                     ));
                     continue;
@@ -474,7 +581,10 @@ fn process_impls(ck: &mut Ck, stmts: &[Stmt]) {
             if !ck.info.structs.contains_key(target) {
                 ck.e(terr(
                     "E0412",
-                    format!("cannot find struct \"{}\" in this scope (impl target)", target),
+                    format!(
+                        "cannot find struct \"{}\" in this scope (impl target)",
+                        target
+                    ),
                     s.span,
                 ));
                 continue;
@@ -528,8 +638,7 @@ fn process_impls(ck: &mut Ck, stmts: &[Stmt]) {
                         continue;
                     }
                     // provided methods
-                    let mut provided: HashMap<String, (Rc<FuncDef>, FnSig, bool)> =
-                        HashMap::new();
+                    let mut provided: HashMap<String, (Rc<FuncDef>, FnSig, bool)> = HashMap::new();
                     for m in methods {
                         let selft = Ty::Struct(target.clone());
                         let sig = ck.sig_of(m, Some(&selft));
@@ -594,10 +703,7 @@ fn process_impls(ck: &mut Ck, stmts: &[Stmt]) {
                         if !ck.info.traits[tn].methods.contains_key(mname) {
                             ck.e(terr(
                                 "E0407",
-                                format!(
-                                    "method \"{}\" is not a member of trait {}",
-                                    mname, tn
-                                ),
+                                format!("method \"{}\" is not a member of trait {}", mname, tn),
                                 def.span,
                             ));
                         }
@@ -729,7 +835,10 @@ pub fn collect_all_defs(stmts: &[Stmt], out: &mut Vec<Rc<FuncDef>>) {
                     rec_e(x, out);
                 }
             }
-            StmtKind::Import { .. } | StmtKind::Break | StmtKind::Continue => {}
+            StmtKind::Enum { .. }
+            | StmtKind::Import { .. }
+            | StmtKind::Break
+            | StmtKind::Continue => {}
         }
     }
     fn rec_stmts(stmts: &[Stmt], out: &mut Vec<Rc<FuncDef>>) {
@@ -825,18 +934,44 @@ impl Ck {
             (Ty::Any, _) | (_, Ty::Any) => true,
             (a, b) if a == b => true,
             (Ty::Float, Ty::Int) => true,
+            (Ty::Option(_), Ty::Null) => true,
+            (Ty::Option(inner), found) => self.assignable(inner, found),
+            (Ty::Result(a1, b1), Ty::Result(a2, b2)) => {
+                self.assignable(a1, a2) && self.assignable(b1, b2)
+            }
             (Ty::Arr(a), Ty::Arr(b)) => self.assignable(a, b),
             (Ty::Map(a1, b1), Ty::Map(a2, b2)) => {
                 self.assignable(a1, a2) && self.assignable(b1, b2)
             }
-            (Ty::Func(_), Ty::Func(_)) => true,
-            (Ty::Trait(t), Ty::Struct(s)) => {
-                self.info
-                    .structs
-                    .get(s)
-                    .map(|sm| sm.trait_impls.contains_key(t))
-                    .unwrap_or(false)
+            (Ty::Func(exp), Ty::Func(found)) => {
+                if exp.params.is_empty() && exp.ret.is_none() {
+                    true
+                } else {
+                    exp.params.len() == found.params.len()
+                        && exp
+                            .params
+                            .iter()
+                            .zip(found.params.iter())
+                            .all(|(a, b)| match (a, b) {
+                                (Some(a), Some(b)) => {
+                                    self.assignable(a, b) && self.assignable(b, a)
+                                }
+                                (None, _) => true,
+                                (Some(_), None) => false,
+                            })
+                        && match (&exp.ret, &found.ret) {
+                            (Some(a), Some(b)) => self.assignable(a, b),
+                            (None, _) => true,
+                            (Some(_), None) => false,
+                        }
+                }
             }
+            (Ty::Trait(t), Ty::Struct(s)) => self
+                .info
+                .structs
+                .get(s)
+                .map(|sm| sm.trait_impls.contains_key(t))
+                .unwrap_or(false),
             _ => false,
         }
     }
@@ -871,6 +1006,113 @@ impl Ck {
     }
 }
 
+fn check_match_exhaustive(ck: &mut Ck, subject_ty: &Ty, arms: &[MatchArm], sp: Span) {
+    let irrefutable = arms.iter().any(|a| {
+        a.pats
+            .iter()
+            .any(|p| matches!(p, Pattern::Wildcard | Pattern::Ident(_)))
+    });
+    if irrefutable {
+        return;
+    }
+    match subject_ty {
+        Ty::Bool => {
+            let has_true = arms
+                .iter()
+                .any(|a| a.pats.iter().any(|p| matches!(p, Pattern::Bool(true))));
+            let has_false = arms
+                .iter()
+                .any(|a| a.pats.iter().any(|p| matches!(p, Pattern::Bool(false))));
+            if !(has_true && has_false) {
+                let missing = match (has_true, has_false) {
+                    (true, false) => "false",
+                    (false, true) => "true",
+                    _ => "true and false",
+                };
+                ck.e(terr(
+                    "E0004",
+                    format!("non-exhaustive match on bool: missing {}", missing),
+                    sp,
+                ));
+            }
+        }
+        Ty::Option(_) => {
+            let has_null = arms
+                .iter()
+                .any(|a| a.pats.iter().any(|p| matches!(p, Pattern::Null)));
+            let has_some = arms.iter().any(|a| {
+                a.pats
+                    .iter()
+                    .any(|p| matches!(p, Pattern::Variant(n, _) if n == "Some"))
+            });
+            if !(has_null && has_some) {
+                ck.e(terr(
+                    "E0004",
+                    "non-exhaustive match on nullable value: expected Some(...) and null/None arms",
+                    sp,
+                ));
+            }
+        }
+        Ty::Enum(en) => {
+            if let Some(meta) = ck.info.enums.get(en) {
+                for v in &meta.order {
+                    let has = arms.iter().any(|a| {
+                        a.pats
+                            .iter()
+                            .any(|p| matches!(p, Pattern::Variant(n, _) if n == v))
+                    });
+                    if !has {
+                        ck.e(terr(
+                            "E0004",
+                            format!("non-exhaustive match on {}: missing {}", en, v),
+                            sp,
+                        ));
+                        break;
+                    }
+                }
+            }
+        }
+        Ty::Result(_, _) => {
+            let has_ok = arms.iter().any(|a| {
+                a.pats
+                    .iter()
+                    .any(|p| matches!(p, Pattern::Variant(n, _) if n == "Ok"))
+            });
+            let has_err = arms.iter().any(|a| {
+                a.pats
+                    .iter()
+                    .any(|p| matches!(p, Pattern::Variant(n, _) if n == "Err"))
+            });
+            if !(has_ok && has_err) {
+                ck.e(terr(
+                    "E0004",
+                    "non-exhaustive match on Result: expected Ok(...) and Err(...) arms",
+                    sp,
+                ));
+            }
+        }
+        _ => {}
+    }
+}
+
+fn bind_pattern_vars(scope: &mut FeScope<'_>, pat: &Pattern, subject_ty: &Ty) {
+    match pat {
+        Pattern::Ident(n) => scope.declare(n, subject_ty.clone(), VarKind::Auto, false),
+        Pattern::Variant(name, args) => {
+            let field_ty = match (name.as_str(), subject_ty) {
+                ("Some", Ty::Option(inner)) => (**inner).clone(),
+                ("Ok", Ty::Result(ok, _)) => (**ok).clone(),
+                ("Err", Ty::Result(_, err)) => (**err).clone(),
+                _ => Ty::Any,
+            };
+            for a in args {
+                bind_pattern_vars(scope, a, &field_ty);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// names of builtin conversions with statically known return types
 fn builtin_ret_ty(name: &str) -> Option<Ty> {
     Some(match name {
@@ -891,6 +1133,10 @@ fn set_guard_flag<T>(n: &crate::ast::Node<T>, t: &Ty) {
         Ty::Int => crate::ast::FLAG_GUARD_INT,
         Ty::Float => crate::ast::FLAG_GUARD_FLOAT,
         Ty::Bool => crate::ast::FLAG_GUARD_BOOL,
+        Ty::Option(inner) => {
+            set_guard_flag(n, inner);
+            crate::ast::FLAG_GUARD_NULLABLE
+        }
         _ => 0,
     };
     if bit != 0 {
@@ -922,6 +1168,23 @@ impl Ck {
         }
         for n in self.info.structs.keys() {
             m.insert(n.clone(), Ty::TypeVal(n.clone()));
+        }
+        for (en, em) in &self.info.enums {
+            for (vn, fields) in &em.variants {
+                if fields.is_empty() {
+                    m.insert(vn.clone(), Ty::Enum(en.clone()));
+                } else {
+                    m.insert(
+                        vn.clone(),
+                        Ty::Func(Rc::new(FnSig {
+                            params: fields.iter().cloned().map(Some).collect(),
+                            rest: false,
+                            defaults: 0,
+                            ret: Some(Ty::Enum(en.clone())),
+                        })),
+                    );
+                }
+            }
         }
         m
     }
@@ -1068,6 +1331,7 @@ impl<'a> FeScope<'a> {
                 }
             }
             StmtKind::Func(_) => {} // bodies checked separately
+            StmtKind::Enum { .. } => {}
             StmtKind::Struct { name, fields } => {
                 // check default values against declared field types
                 let metas: Vec<(String, Ty, Option<Expr>, Span)> = {
@@ -1187,15 +1451,14 @@ impl<'a> FeScope<'a> {
             }
             StmtKind::MatchStmt { subject, arms } => {
                 let st = self.expr(ck, subject);
+                check_match_exhaustive(ck, &st, arms, subject.span);
                 let saved0 = (self.fe.tys.clone(), self.fe.finals.clone());
                 let mut acc: Option<(HashMap<String, Ty>, HashMap<String, Ty>)> = None;
                 for a in arms {
                     self.fe.tys = saved0.0.clone();
                     self.fe.finals = saved0.1.clone();
                     for p in &a.pats {
-                        if let Pattern::Ident(n) = p {
-                            self.declare(n, st.clone(), VarKind::Auto, false);
-                        }
+                        bind_pattern_vars(self, p, &st);
                     }
                     match &a.body {
                         MatchBody::Expr(e) => {
@@ -1239,12 +1502,7 @@ impl<'a> FeScope<'a> {
             ExprKind::Int(_) => Ty::Int,
             ExprKind::Float(_) => Ty::Float,
             ExprKind::Str(_) => Ty::Str,
-            ExprKind::Ident(name) => self
-                .fe
-                .tys
-                .get(name)
-                .cloned()
-                .unwrap_or(Ty::Any),
+            ExprKind::Ident(name) => self.fe.tys.get(name).cloned().unwrap_or(Ty::Any),
             ExprKind::Array(items) => {
                 let mut el = Ty::Any;
                 let mut known = false;
@@ -1439,14 +1697,13 @@ impl<'a> FeScope<'a> {
             }
             ExprKind::Match { subject, arms } => {
                 let st = self.expr(ck, subject);
+                check_match_exhaustive(ck, &st, arms, subject.span);
                 let saved = self.fe.tys.clone();
                 let mut acc: Option<Ty> = None;
                 for a in arms {
                     self.fe.tys = saved.clone();
                     for p in &a.pats {
-                        if let Pattern::Ident(n) = p {
-                            self.declare(n, st.clone(), VarKind::Auto, false);
-                        }
+                        bind_pattern_vars(self, p, &st);
                     }
                     let at = match &a.body {
                         MatchBody::Expr(e2) => self.expr(ck, e2),
@@ -1463,9 +1720,7 @@ impl<'a> FeScope<'a> {
                 self.fe.tys = saved;
                 acc.unwrap_or(Ty::Any)
             }
-            ExprKind::StructLit { name, fields } => {
-                self.struct_lit_ty(ck, name, fields, e.span)
-            }
+            ExprKind::StructLit { name, fields } => self.struct_lit_ty(ck, name, fields, e.span),
         }
     }
 
@@ -1533,7 +1788,13 @@ impl<'a> FeScope<'a> {
                                 ck.must_assign(&ft, vt, sp, &format!("field \"{}\"", name));
                             }
                             None => {
-                                if ck.info.structs.get(sn).map(|s| s.methods.contains_key(name)).unwrap_or(false) {
+                                if ck
+                                    .info
+                                    .structs
+                                    .get(sn)
+                                    .map(|s| s.methods.contains_key(name))
+                                    .unwrap_or(false)
+                                {
                                     ck.e(terr(
                                         "E0308",
                                         format!("cannot assign to method \"{}\" of {}", name, sn),
@@ -1570,6 +1831,18 @@ impl<'a> FeScope<'a> {
         match &ot {
             Ty::Any => Ty::Any,
             Ty::Map(_, v) => (**v).clone(),
+            Ty::Option(inner) => {
+                ck.e(terr(
+                    "E0308",
+                    format!(
+                        "cannot access member \"{}\" on nullable {} without checking for null",
+                        name,
+                        ty_name(inner)
+                    ),
+                    sp,
+                ));
+                Ty::Any
+            }
             Ty::TypeVal(real) => {
                 // the struct TYPE value itself: associated functions (new, …)
                 let sm = match ck.info.structs.get(real) {
@@ -1617,10 +1890,7 @@ impl<'a> FeScope<'a> {
                     0 => {
                         ck.e(terr(
                             "E0599",
-                            format!(
-                                "no field or method \"{}\" found on struct {}",
-                                name, sn
-                            ),
+                            format!("no field or method \"{}\" found on struct {}", name, sn),
                             sp,
                         ));
                         Ty::Any
@@ -1629,10 +1899,7 @@ impl<'a> FeScope<'a> {
                     _ => {
                         ck.e(terr(
                             "E0034",
-                            format!(
-                                "multiple applicable items in scope for method \"{}\"",
-                                name
-                            ),
+                            format!("multiple applicable items in scope for method \"{}\"", name),
                             sp,
                         ));
                         Ty::Any
@@ -1680,6 +1947,38 @@ impl<'a> FeScope<'a> {
     }
 
     fn call_ty(&mut self, ck: &mut Ck, callee: &Expr, args: &[Expr], sp: Span) -> Ty {
+        // Built-in generic constructors. Option is represented as `T | null`:
+        // `Some(x)` is just `x` at runtime, while `None` lexes as `null`.
+        if let ExprKind::Ident(n) = &callee.node {
+            match n.as_str() {
+                "Some" => {
+                    if args.len() != 1 {
+                        ck.e(terr("E0061", "Some takes exactly 1 argument", sp));
+                        return Ty::Option(Box::new(Ty::Any));
+                    }
+                    let t = self.expr(ck, &args[0]);
+                    return Ty::Option(Box::new(t));
+                }
+                "Ok" => {
+                    if args.len() != 1 {
+                        ck.e(terr("E0061", "Ok takes exactly 1 argument", sp));
+                        return Ty::Result(Box::new(Ty::Any), Box::new(Ty::Any));
+                    }
+                    let t = self.expr(ck, &args[0]);
+                    return Ty::Result(Box::new(t), Box::new(Ty::Any));
+                }
+                "Err" => {
+                    if args.len() != 1 {
+                        ck.e(terr("E0061", "Err takes exactly 1 argument", sp));
+                        return Ty::Result(Box::new(Ty::Any), Box::new(Ty::Any));
+                    }
+                    let t = self.expr(ck, &args[0]);
+                    return Ty::Result(Box::new(Ty::Any), Box::new(t));
+                }
+                _ => {}
+            }
+        }
+
         // method call on a &mut receiver bound to a const?
         if let ExprKind::Member(obj, name) = &callee.node {
             // find the method meta for the receiver's static type
@@ -1696,10 +1995,7 @@ impl<'a> FeScope<'a> {
             if let Some((mutable, sn)) = meta {
                 if mutable {
                     if let ExprKind::Ident(recv_name) = &obj.node {
-                        if matches!(
-                            self.fe.kinds.get(recv_name),
-                            Some(VarKind::Const)
-                        ) {
+                        if matches!(self.fe.kinds.get(recv_name), Some(VarKind::Const)) {
                             ck.e(terr(
                                 "E0594",
                                 format!(
@@ -1724,11 +2020,7 @@ impl<'a> FeScope<'a> {
                 } else if let Some(f) = ck.info.top_fns.get(n) {
                     let id = FuncDef::id(f);
                     Ty::Func(Rc::new(
-                        ck.info
-                            .fn_sigs
-                            .get(&id)
-                            .cloned()
-                            .unwrap_or_default(),
+                        ck.info.fn_sigs.get(&id).cloned().unwrap_or_default(),
                     ))
                 } else if let Some(rt) = builtin_ret_ty(n) {
                     // known builtin conversion; args unchecked
@@ -1756,10 +2048,7 @@ impl<'a> FeScope<'a> {
                     None => {
                         ck.e(terr(
                             "E0618",
-                            format!(
-                                "struct {} is not callable (use {} {{ .. }})",
-                                real, real
-                            ),
+                            format!("struct {} is not callable (use {} {{ .. }})", real, real),
                             sp,
                         ));
                         Ty::Any
@@ -1916,11 +2205,7 @@ impl<'a> FeScope<'a> {
                     _ => {
                         ck.e(terr(
                             "E0308",
-                            format!(
-                                "cannot add {} and {}",
-                                ty_name(ta),
-                                ty_name(tb)
-                            ),
+                            format!("cannot add {} and {}", ty_name(ta), ty_name(tb)),
                             sp,
                         ));
                         Ty::Any
@@ -2015,6 +2300,12 @@ fn join(a: &Ty, b: &Ty) -> Ty {
         (x, y) if x == y => x.clone(),
         (Ty::Int, Ty::Float) | (Ty::Float, Ty::Int) => Ty::Float,
         (Ty::Arr(x), Ty::Arr(y)) => Ty::Arr(Box::new(join(x, y))),
+        (Ty::Map(k1, v1), Ty::Map(k2, v2)) => {
+            Ty::Map(Box::new(join(k1, k2)), Box::new(join(v1, v2)))
+        }
+        (Ty::Option(x), Ty::Null) | (Ty::Null, Ty::Option(x)) => Ty::Option(x.clone()),
+        (Ty::Null, x) | (x, Ty::Null) => Ty::Option(Box::new(x.clone())),
+        (Ty::Option(x), y) | (y, Ty::Option(x)) => Ty::Option(Box::new(join(x, y))),
         _ => Ty::Any,
     }
 }
@@ -2027,6 +2318,9 @@ fn meet(prev: &Ty, new: &Ty) -> Ty {
     match (prev, new) {
         (x, y) if x == y => x.clone(),
         (Ty::Int, Ty::Float) | (Ty::Float, Ty::Int) => Ty::Float,
+        (Ty::Option(x), Ty::Option(y)) => Ty::Option(Box::new(meet(x, y))),
+        (Ty::Option(x), Ty::Null) | (Ty::Null, Ty::Option(x)) => Ty::Option(x.clone()),
+        (Ty::Option(x), y) | (y, Ty::Option(x)) => Ty::Option(Box::new(meet(x, y))),
         _ => Ty::Any,
     }
 }

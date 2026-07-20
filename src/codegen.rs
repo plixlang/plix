@@ -27,14 +27,14 @@
 
 use crate::ast::*;
 use crate::parser;
-use crate::resolve::{self, Resolution, MAIN_RES_ID};
+use crate::resolve::{self, MAIN_RES_ID, Resolution};
+use cranelift_codegen::Context;
 use cranelift_codegen::ir::condcodes::IntCC;
 use cranelift_codegen::ir::types;
 use cranelift_codegen::ir::{
     AbiParam, Block, InstBuilder, MemFlags, Signature, StackSlotData, StackSlotKind, Value as CVal,
 };
 use cranelift_codegen::settings::{self, Configurable};
-use cranelift_codegen::Context;
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
 use cranelift_module::{DataDescription, DataId, FuncId, Linkage, Module};
 use cranelift_object::{ObjectBuilder, ObjectModule};
@@ -99,8 +99,12 @@ struct ModUnit {
 }
 
 fn build_object(src: &str, name: &str) -> Result<Vec<u8>, String> {
-    let stmts = parser::parse_file(src)
-        .map_err(|e| format!("{}:{}:{}: syntax error: {}", name, e.span.line, e.span.col, e.msg))?;
+    let stmts = parser::parse_file(src).map_err(|e| {
+        format!(
+            "{}:{}:{}: syntax error: {}",
+            name, e.span.line, e.span.col, e.msg
+        )
+    })?;
     let main_tinfo = crate::typecheck::check_program(&stmts)
         .map_err(|errs| crate::owncheck::format_errors(&errs, src, name))?;
     crate::owncheck::check_program(&stmts)
@@ -184,8 +188,12 @@ fn build_object(src: &str, name: &str) -> Result<Vec<u8>, String> {
         .map_err(|e| format!("cannot create host ISA: {}", e))?
         .finish(flags)
         .map_err(|e| format!("cannot finish ISA: {}", e))?;
-    let obj = ObjectBuilder::new(isa, "plix_program", cranelift_module::default_libcall_names())
-        .map_err(|e| format!("object builder: {}", e))?;
+    let obj = ObjectBuilder::new(
+        isa,
+        "plix_program",
+        cranelift_module::default_libcall_names(),
+    )
+    .map_err(|e| format!("object builder: {}", e))?;
 
     let mut c = Compiler {
         ctx: Context::new(),
@@ -242,7 +250,11 @@ fn build_object(src: &str, name: &str) -> Result<Vec<u8>, String> {
         let fid = c
             .shared
             .module
-            .declare_function(&format!("plix_mod_init_{}", i), Linkage::Local, &c.sig.clone())
+            .declare_function(
+                &format!("plix_mod_init_{}", i),
+                Linkage::Local,
+                &c.sig.clone(),
+            )
             .map_err(|e| e.to_string())?;
         m.init_fid = Some(fid);
     }
@@ -252,7 +264,15 @@ fn build_object(src: &str, name: &str) -> Result<Vec<u8>, String> {
         let res = m.res.as_ref().unwrap();
         let tinfo = m.tinfo.as_ref().unwrap();
         let fid = m.init_fid.unwrap();
-        c.compile_unit_pseudo_fn(fid, &m.stmts, res, tinfo, m.flag_idx, &[], &format!("module {}", m.alias))?;
+        c.compile_unit_pseudo_fn(
+            fid,
+            &m.stmts,
+            res,
+            tinfo,
+            m.flag_idx,
+            &[],
+            &format!("module {}", m.alias),
+        )?;
     }
 
     // user functions
@@ -284,7 +304,15 @@ fn build_object(src: &str, name: &str) -> Result<Vec<u8>, String> {
             }
         })
         .collect();
-    c.compile_unit_pseudo_fn(plix_main_id, &stmts, &main_res, &main_tinfo, usize::MAX, &mod_meta, "main")?;
+    c.compile_unit_pseudo_fn(
+        plix_main_id,
+        &stmts,
+        &main_res,
+        &main_tinfo,
+        usize::MAX,
+        &mod_meta,
+        "main",
+    )?;
     c.compile_c_main(plix_main_id, total_globals as i64)?;
 
     let product = c.shared.module.finish();
@@ -376,7 +404,9 @@ impl Shared {
             .map_err(|e| e.to_string())?;
         let mut dd = DataDescription::new();
         dd.define(s.as_bytes().to_vec().into_boxed_slice());
-        self.module.define_data(did, &dd).map_err(|e| e.to_string())?;
+        self.module
+            .define_data(did, &dd)
+            .map_err(|e| e.to_string())?;
         self.strings.insert(s.to_string(), did);
         Ok(did)
     }
@@ -443,6 +473,18 @@ enum Want {
 
 const F64_TY: cranelift_codegen::ir::Type = types::F64;
 
+fn guard_flags_of_typeexpr(t: &TypeExpr) -> u8 {
+    match t.name.as_str() {
+        "int" => crate::ast::FLAG_GUARD_INT,
+        "float" => crate::ast::FLAG_GUARD_FLOAT,
+        "bool" => crate::ast::FLAG_GUARD_BOOL,
+        "Option" | "option" if t.args.len() == 1 => {
+            crate::ast::FLAG_GUARD_NULLABLE | guard_flags_of_typeexpr(&t.args[0])
+        }
+        _ => 0,
+    }
+}
+
 struct LoopCtx {
     cont: Block,
     brk: Block,
@@ -457,10 +499,9 @@ struct FEnv {
     cp_var: Variable,
     cells_ptr: CVal,
     loop_stack: Vec<LoopCtx>,
-    /// declared return-type guard of the enclosing function (typed
-    /// boundaries: boxed -> raw checks happen at the return site, exactly
-    /// where the interpreter enforces them)
-    ret_want: Option<Want>,
+    /// runtime typed-boundary guard bits for declared returns, including
+    /// nullable scalar forms such as `int?`.
+    ret_flags: u8,
     fn_name: String,
 }
 
@@ -864,14 +905,13 @@ impl<'a> Emit<'a> {
                         // division by zero is a runtime error (language semantics)
                         let zero = b.ins().f64const(0.0);
                         let is_zero =
-                            b.ins().fcmp(cranelift_codegen::ir::condcodes::FloatCC::Equal, y, zero);
+                            b.ins()
+                                .fcmp(cranelift_codegen::ir::condcodes::FloatCC::Equal, y, zero);
                         self.brif_err_msg(b, is_zero, "division by zero", err_blk)?;
                         let r = b.ins().fdiv(x, y);
                         Ok(Some(RawVal::F(r)))
                     }
-                    BinOp::BAnd | BinOp::BOr | BinOp::BXor
-                        if sa == STy::Int && sb == STy::Int =>
-                    {
+                    BinOp::BAnd | BinOp::BOr | BinOp::BXor if sa == STy::Int && sb == STy::Int => {
                         let ra = self.emit_raw(b, fe, a, epilogue, err_blk)?;
                         let rb = self.emit_raw(b, fe, b2, epilogue, err_blk)?;
                         let (RawVal::I(x), RawVal::I(y)) = (ra.unwrap(), rb.unwrap()) else {
@@ -1091,7 +1131,11 @@ impl<'a> Emit<'a> {
                 let m = b.ins().band(t1, t2);
                 let zero = b.ins().iconst(I64, 0);
                 let ov = b.ins().icmp(IntCC::SignedLessThan, m, zero);
-                let opname = if op == BinOp::Add { "addition" } else { "subtraction" };
+                let opname = if op == BinOp::Add {
+                    "addition"
+                } else {
+                    "subtraction"
+                };
                 self.brif_err_msg(
                     b,
                     ov,
@@ -1315,22 +1359,16 @@ impl<'a> Emit<'a> {
             let (Some(RawVal::I(x)), Some(RawVal::I(y))) = (ra, rb) else {
                 return Err("internal: raw_eq ints".into());
             };
-            b.ins().icmp(
-                if eq { IntCC::Equal } else { IntCC::NotEqual },
-                x,
-                y,
-            )
+            b.ins()
+                .icmp(if eq { IntCC::Equal } else { IntCC::NotEqual }, x, y)
         } else if sa == STy::Bool && sb == STy::Bool {
             let ra = self.emit_raw(b, fe, a, epilogue, err_blk)?;
             let rb = self.emit_raw(b, fe, c, epilogue, err_blk)?;
             let (Some(RawVal::B(x)), Some(RawVal::B(y))) = (ra, rb) else {
                 return Err("internal: raw_eq bools".into());
             };
-            b.ins().icmp(
-                if eq { IntCC::Equal } else { IntCC::NotEqual },
-                x,
-                y,
-            )
+            b.ins()
+                .icmp(if eq { IntCC::Equal } else { IntCC::NotEqual }, x, y)
         } else if numeric(sa) && numeric(sb) {
             let x = self.emit_raw_f64(b, fe, a, epilogue, err_blk)?;
             let y = self.emit_raw_f64(b, fe, c, epilogue, err_blk)?;
@@ -1486,8 +1524,8 @@ impl<'a> Emit<'a> {
             Want::Bool => STy::Bool,
         };
         let st = self.static_ty(fe, e);
-        let raw_ok = st != STy::Box
-            && (st == want_sty || (want_sty == STy::Float && st == STy::Int));
+        let raw_ok =
+            st != STy::Box && (st == want_sty || (want_sty == STy::Float && st == STy::Int));
         if raw_ok {
             if let Some(rv) = self.emit_raw(b, fe, e, epilogue, err_blk)? {
                 return match (want, rv) {
@@ -1597,7 +1635,10 @@ impl<'a> Emit<'a> {
                 self.rcall(b, "plix_global_set", 2, &[idx, newv])?;
                 Ok(())
             }
-            _ => Err("internal: assign_loc expects a boxed V; raw locals are handled by raw store paths".into()),
+            _ => Err(
+                "internal: assign_loc expects a boxed V; raw locals are handled by raw store paths"
+                    .into(),
+            ),
         }
     }
 
@@ -1614,16 +1655,84 @@ impl<'a> Emit<'a> {
         err_blk: Block,
         what: &str,
     ) -> CResult<CVal> {
-        use crate::ast::{FLAG_GUARD_BOOL, FLAG_GUARD_FLOAT, FLAG_GUARD_INT};
+        use crate::ast::{FLAG_GUARD_BOOL, FLAG_GUARD_FLOAT, FLAG_GUARD_INT, FLAG_GUARD_NULLABLE};
+        let nullable = flags & FLAG_GUARD_NULLABLE != 0;
+
         if flags & FLAG_GUARD_INT != 0 {
+            if nullable {
+                let resv = b.declare_var(I64);
+                let null_blk = b.create_block();
+                let check_blk = b.create_block();
+                let done_blk = b.create_block();
+                let n = b.ins().iconst(I64, TNULL);
+                let is_null = b.ins().icmp(IntCC::Equal, v, n);
+                b.ins().brif(is_null, null_blk, &[], check_blk, &[]);
+                b.switch_to_block(null_blk);
+                b.seal_block(null_blk);
+                b.def_var(resv, v);
+                b.ins().jump(done_blk, &[]);
+                b.switch_to_block(check_blk);
+                b.seal_block(check_blk);
+                let raw = self.unbox_int_guard(b, v, err_blk, what)?;
+                let boxed = self.rcall(b, "plix_int", 1, &[raw])?;
+                b.def_var(resv, boxed);
+                b.ins().jump(done_blk, &[]);
+                b.switch_to_block(done_blk);
+                b.seal_block(done_blk);
+                return Ok(b.use_var(resv));
+            }
             let raw = self.unbox_int_guard(b, v, err_blk, what)?;
             return self.rcall(b, "plix_int", 1, &[raw]);
         }
         if flags & FLAG_GUARD_FLOAT != 0 {
+            if nullable {
+                let resv = b.declare_var(I64);
+                let null_blk = b.create_block();
+                let check_blk = b.create_block();
+                let done_blk = b.create_block();
+                let n = b.ins().iconst(I64, TNULL);
+                let is_null = b.ins().icmp(IntCC::Equal, v, n);
+                b.ins().brif(is_null, null_blk, &[], check_blk, &[]);
+                b.switch_to_block(null_blk);
+                b.seal_block(null_blk);
+                b.def_var(resv, v);
+                b.ins().jump(done_blk, &[]);
+                b.switch_to_block(check_blk);
+                b.seal_block(check_blk);
+                let raw = self.unbox_float_guard(b, v, err_blk, what)?;
+                let boxed = self.box_raw(b, RawVal::F(raw))?;
+                b.def_var(resv, boxed);
+                b.ins().jump(done_blk, &[]);
+                b.switch_to_block(done_blk);
+                b.seal_block(done_blk);
+                return Ok(b.use_var(resv));
+            }
             let raw = self.unbox_float_guard(b, v, err_blk, what)?;
             return self.box_raw(b, RawVal::F(raw));
         }
         if flags & FLAG_GUARD_BOOL != 0 {
+            if nullable {
+                let resv = b.declare_var(I64);
+                let null_blk = b.create_block();
+                let check_blk = b.create_block();
+                let done_blk = b.create_block();
+                let n = b.ins().iconst(I64, TNULL);
+                let is_null = b.ins().icmp(IntCC::Equal, v, n);
+                b.ins().brif(is_null, null_blk, &[], check_blk, &[]);
+                b.switch_to_block(null_blk);
+                b.seal_block(null_blk);
+                b.def_var(resv, v);
+                b.ins().jump(done_blk, &[]);
+                b.switch_to_block(check_blk);
+                b.seal_block(check_blk);
+                let t = self.rcall(b, "plix_truthy", 1, &[v])?;
+                let tb = self.tag_bool(b, t);
+                b.def_var(resv, tb);
+                b.ins().jump(done_blk, &[]);
+                b.switch_to_block(done_blk);
+                b.seal_block(done_blk);
+                return Ok(b.use_var(resv));
+            }
             let t = self.rcall(b, "plix_truthy", 1, &[v])?;
             return Ok(self.tag_bool(b, t));
         }
@@ -1715,14 +1824,18 @@ impl<'a> Emit<'a> {
         depth: usize,
     ) -> CResult<()> {
         match &s.node {
-            StmtKind::Var { kind: _, name, value, .. } => {
+            StmtKind::Var {
+                kind: _,
+                name,
+                value,
+                ..
+            } => {
                 // raw path: provable-typed locals skip boxing entirely
                 if !(self.is_unit && depth == 0) {
                     if let Some(loc) = fe.vars.get(name).copied() {
                         if let Some(want) = Self::raw_want_of(loc) {
-                            let raw = self.emit_typed(
-                                b, fe, value, want, err_blk, epilogue, name,
-                            )?;
+                            let raw =
+                                self.emit_typed(b, fe, value, want, err_blk, epilogue, name)?;
                             match loc {
                                 Loc::RawInt(v) | Loc::RawFloat(v) | Loc::RawBool(v) => {
                                     b.def_var(v, raw);
@@ -1773,7 +1886,13 @@ impl<'a> Emit<'a> {
                 let defv = self.rcall(b, "plix_struct_new", 2, &[np, nl])?;
                 for f in fields {
                     let (kp, kl) = self.str_ptr(b, &f.name)?;
-                    let tyn = f.ty.as_ref().map(|t| t.name.clone()).unwrap_or_default();
+                    let tyn =
+                        f.ty.as_ref()
+                            .map(|t| match t.name.as_str() {
+                                "Option" | "option" => String::new(),
+                                other => other.to_string(),
+                            })
+                            .unwrap_or_default();
                     let (tp, tl) = self.str_ptr(b, &tyn)?;
                     let (dflt, has) = match &f.default {
                         Some(de) => {
@@ -1801,6 +1920,25 @@ impl<'a> Emit<'a> {
                     self.rcall(b, "plix_global_set", 2, &[idx, defv])?;
                 } else {
                     self.declare_local(b, fe, name, defv)?;
+                }
+                Ok(())
+            }
+            StmtKind::Enum { name: _, variants } => {
+                for vdef in variants {
+                    if !vdef.fields.is_empty() {
+                        // Payload enum constructors are currently provided by
+                        // built-in Result/Option. User payload enums are parsed
+                        // and checked, but native runtime lowering is deferred.
+                        continue;
+                    }
+                    let (vp, vl) = self.str_ptr(b, &vdef.name)?;
+                    let vv = self.rcall(b, "plix_variant_new", 2, &[vp, vl])?;
+                    if self.is_unit && depth == 0 {
+                        if let Some(&g) = self.res.globals.get(&vdef.name) {
+                            let idx = b.ins().iconst(I64, g as i64);
+                            self.rcall(b, "plix_global_set", 2, &[idx, vv])?;
+                        }
+                    }
                 }
                 Ok(())
             }
@@ -1842,12 +1980,7 @@ impl<'a> Emit<'a> {
                             let fv = self.make_closure(b, fe, mdef)?;
                             self.guard(b, err_blk)?;
                             let (kp, kl) = self.str_ptr(b, mname)?;
-                            self.rcall(
-                                b,
-                                "plix_struct_method",
-                                6,
-                                &[defv, kp, kl, fv, tp, tl],
-                            )?;
+                            self.rcall(b, "plix_struct_method", 6, &[defv, kp, kl, fv, tp, tl])?;
                             self.guard(b, err_blk)?;
                         }
                     }
@@ -1972,7 +2105,9 @@ impl<'a> Emit<'a> {
                 b.seal_block(exit_blk);
                 Ok(())
             }
-            StmtKind::ForIn { name, iter, body, .. } => {
+            StmtKind::ForIn {
+                name, iter, body, ..
+            } => {
                 let it = self.expr(b, fe, iter, epilogue, err_blk)?;
                 self.guard(b, err_blk)?;
                 let arr = self.rcall(b, "plix_forin_iter", 1, &[it])?;
@@ -2018,13 +2153,8 @@ impl<'a> Emit<'a> {
                     self.store_boxed_into_raw(b, loop_loc, elem, err_blk, "for-in element")?;
                 } else {
                     // annotated loop variable kept boxed: guard at the boundary
-                    let elem = self.guard_boxed(
-                        b,
-                        s.flags.get(),
-                        elem,
-                        err_blk,
-                        "for-in element",
-                    )?;
+                    let elem =
+                        self.guard_boxed(b, s.flags.get(), elem, err_blk, "for-in element")?;
                     self.assign_loc(b, fe, loop_loc, elem)?;
                 }
                 fe.loop_stack.push(LoopCtx {
@@ -2068,30 +2198,23 @@ impl<'a> Emit<'a> {
                             // declared return type on a dynamic value: enforce
                             // at the return site (interpreter parity), with
                             // the canonical representation (float widening /
-                            // truthiness for bool)
-                            match fe.ret_want {
-                                Some(Want::Int) => {
-                                    let what =
-                                        format!("return value of {}", fe.fn_name);
-                                    let _ = self.unbox_int_guard(b, x, err_blk, &what)?;
-                                    x
-                                }
-                                Some(Want::Float) => {
-                                    let what =
-                                        format!("return value of {}", fe.fn_name);
-                                    let raw =
-                                        self.unbox_float_guard(b, x, err_blk, &what)?;
-                                    self.box_raw(b, RawVal::F(raw))?
-                                }
-                                Some(Want::Bool) => {
-                                    let t = self.rcall(b, "plix_truthy", 1, &[x])?;
-                                    self.tag_bool(b, t)
-                                }
-                                None => x,
+                            // truthiness for bool), including nullable scalar
+                            // forms such as `int?`.
+                            if fe.ret_flags != 0 {
+                                let what = format!("return value of {}", fe.fn_name);
+                                self.guard_boxed(b, fe.ret_flags, x, err_blk, &what)?
+                            } else {
+                                x
                             }
                         }
                     }
                     None => b.ins().iconst(I64, TNULL),
+                };
+                let val = if fe.ret_flags != 0 {
+                    let what = format!("return value of {}", fe.fn_name);
+                    self.guard_boxed(b, fe.ret_flags, val, err_blk, &what)?
+                } else {
+                    val
                 };
                 // own the return value; frame_pop adopts it
                 self.rcall(b, "plix_retain", 1, &[val])?;
@@ -2172,19 +2295,31 @@ impl<'a> Emit<'a> {
                     Pattern::Ident(n) => {
                         let cur = b.use_var(subj_v);
                         let used = self.rcall(b, "plix_var_use", 1, &[cur])?;
-                        match fe.vars.get(n).copied() {
-                            Some(loc) if Self::raw_want_of(loc).is_some() => {
-                                // rawified binding: unbox with a guard, then
-                                // release the escaped reference (a raw slot
-                                // holds no heap ownership)
-                                self.store_boxed_into_raw(b, loc, used, err_blk, "match binding")?;
-                                self.rcall(b, "plix_release", 1, &[used])?;
-                            }
-                            _ => self.declare_local(b, fe, n, used)?,
-                        }
+                        self.bind_match_name(b, fe, n, used, err_blk)?;
                         b.ins().jump(arm_blk, &[]);
                         falls_to_next = false;
                         break;
+                    }
+                    Pattern::Variant(name, args) => {
+                        let subj = b.use_var(subj_v);
+                        let (np, nl) = self.str_ptr(b, name)?;
+                        let ok = self.rcall(b, "plix_variant_is", 3, &[subj, np, nl])?;
+                        let bind_blk = b.create_block();
+                        let cont = b.create_block();
+                        b.ins().brif(ok, bind_blk, &[], cont, &[]);
+                        b.switch_to_block(bind_blk);
+                        b.seal_block(bind_blk);
+                        for (i, ap) in args.iter().enumerate() {
+                            if let Pattern::Ident(n) = ap {
+                                let idx = b.ins().iconst(I64, i as i64);
+                                let fv0 = self.rcall(b, "plix_variant_field", 2, &[subj, idx])?;
+                                let fv = self.rcall(b, "plix_var_use", 1, &[fv0])?;
+                                self.bind_match_name(b, fe, n, fv, err_blk)?;
+                            }
+                        }
+                        b.ins().jump(arm_blk, &[]);
+                        b.switch_to_block(cont);
+                        b.seal_block(cont);
                     }
                     _ => {
                         let pv = self.pattern_value(b, pat)?;
@@ -2240,11 +2375,31 @@ impl<'a> Emit<'a> {
         Ok(res_v.map(|rv| b.use_var(rv)))
     }
 
+    fn bind_match_name(
+        &mut self,
+        b: &mut FunctionBuilder,
+        fe: &mut FEnv,
+        n: &str,
+        used: CVal,
+        err_blk: Block,
+    ) -> CResult<()> {
+        match fe.vars.get(n).copied() {
+            Some(loc) if Self::raw_want_of(loc).is_some() => {
+                self.store_boxed_into_raw(b, loc, used, err_blk, "match binding")?;
+                self.rcall(b, "plix_release", 1, &[used])?;
+            }
+            _ => self.declare_local(b, fe, n, used)?,
+        }
+        Ok(())
+    }
+
     fn pattern_value(&mut self, b: &mut FunctionBuilder, pat: &Pattern) -> CResult<CVal> {
         Ok(match pat {
             Pattern::Null => b.ins().iconst(I64, TNULL),
             Pattern::Bool(x) => b.ins().iconst(I64, if *x { TTRUE } else { TFALSE }),
-            Pattern::Int(i) => b.ins().iconst(I64, tconst_int((*i).clamp(INT_MIN, INT_MAX))),
+            Pattern::Int(i) => b
+                .ins()
+                .iconst(I64, tconst_int((*i).clamp(INT_MIN, INT_MAX))),
             Pattern::Float(f) => {
                 let bits = b.ins().iconst(I64, f.to_bits() as i64);
                 self.rcall(b, "plix_float_bits", 1, &[bits])?
@@ -2253,7 +2408,9 @@ impl<'a> Emit<'a> {
                 let (p, l) = self.str_ptr(b, s)?;
                 self.rcall(b, "plix_str_new", 2, &[p, l])?
             }
-            Pattern::Ident(_) | Pattern::Wildcard => b.ins().iconst(I64, TTRUE),
+            Pattern::Ident(_) | Pattern::Variant(_, _) | Pattern::Wildcard => {
+                b.ins().iconst(I64, TTRUE)
+            }
         })
     }
 
@@ -2283,11 +2440,10 @@ impl<'a> Emit<'a> {
             val = self.rcall(b, "plix_call", 3, &[imp, addr, one])?;
             self.guard(b, err_blk)?;
         } else if module.ends_with(".px") {
-            let meta = self
-                .mods
-                .iter()
-                .find(|m| m.alias == alias)
-                .ok_or_else(|| format!("native: module \"{}\" unknown (line {})", alias, line))?;
+            let meta =
+                self.mods.iter().find(|m| m.alias == alias).ok_or_else(|| {
+                    format!("native: module \"{}\" unknown (line {})", alias, line)
+                })?;
             let nullv = b.ins().iconst(I64, TNULL);
             let zero = b.ins().iconst(I64, 0);
             let fr = self
@@ -2357,7 +2513,7 @@ impl<'a> Emit<'a> {
                     return Err(format!(
                         "internal: capture \"{}\" of {} is not a cell",
                         name, def.name
-                    ))
+                    ));
                 }
             }
         }
@@ -2945,7 +3101,13 @@ impl Compiler {
         Ok(())
     }
 
-    fn compile_function(&mut self, id: usize, def: &Rc<FuncDef>, res: &Resolution, tinfo: &crate::typecheck::TypeInfo) -> CResult<()> {
+    fn compile_function(
+        &mut self,
+        id: usize,
+        def: &Rc<FuncDef>,
+        res: &Resolution,
+        tinfo: &crate::typecheck::TypeInfo,
+    ) -> CResult<()> {
         let fid = self.fns[&id];
         let fnres = res
             .fns
@@ -2968,12 +3130,11 @@ impl Compiler {
         let err_blk = fb.create_block();
         let ret_var = fb.declare_var(I64);
         let cp_var = fb.declare_var(I64);
-        let ret_want = def.ret_ty.as_ref().and_then(|t| match t.name.as_str() {
-            "int" => Some(Want::Int),
-            "float" => Some(Want::Float),
-            "bool" => Some(Want::Bool),
-            _ => None,
-        });
+        let ret_flags = def
+            .ret_ty
+            .as_ref()
+            .map(guard_flags_of_typeexpr)
+            .unwrap_or(0);
         let mut fe = FEnv {
             vars: HashMap::new(),
             locals_all: Vec::new(),
@@ -2981,7 +3142,7 @@ impl Compiler {
             cp_var,
             cells_ptr,
             loop_stack: Vec::new(),
-            ret_want,
+            ret_flags,
             fn_name: def.name.clone(),
         };
         let nullv = fb.ins().iconst(I64, TNULL);
@@ -3100,9 +3261,9 @@ impl Compiler {
             fb.ins().brif(has, ok_blk, &[], dft_blk, &[]);
             fb.switch_to_block(ok_blk);
             fb.seal_block(ok_blk);
-            let argval =
-                fb.ins()
-                    .load(I64, MemFlags::trusted(), args_ptr, (i * 8) as i32);
+            let argval = fb
+                .ins()
+                .load(I64, MemFlags::trusted(), args_ptr, (i * 8) as i32);
             let argval = em.rcall(&mut fb, "plix_var_use", 1, &[argval])?;
             match raw_loc {
                 Some((st, _)) => {
@@ -3134,9 +3295,8 @@ impl Compiler {
                             STy::Bool => Want::Bool,
                             STy::Box => unreachable!(),
                         };
-                        let raw = em.emit_typed(
-                            &mut fb, &mut fe, d, want, err_blk, epilogue, &p.name,
-                        )?;
+                        let raw =
+                            em.emit_typed(&mut fb, &mut fe, d, want, err_blk, epilogue, &p.name)?;
                         fb.def_var(pvar, raw);
                     }
                     None => {
@@ -3186,7 +3346,15 @@ impl Compiler {
         let locals = fe.locals_all.clone();
         let rv = fe.ret_var;
         let tname = def.name.clone();
-        Self::finish_body(&mut em.shared, &mut fb, &locals, rv, epilogue, err_blk, &tname)?;
+        Self::finish_body(
+            &mut em.shared,
+            &mut fb,
+            &locals,
+            rv,
+            epilogue,
+            err_blk,
+            &tname,
+        )?;
         drop(em);
         fb.seal_all_blocks();
         fb.finalize();
@@ -3234,7 +3402,7 @@ impl Compiler {
             cp_var,
             cells_ptr,
             loop_stack: Vec::new(),
-            ret_want: None,
+            ret_flags: 0,
             fn_name: String::new(),
         };
         let nullv = fb.ins().iconst(I64, TNULL);
@@ -3286,7 +3454,15 @@ impl Compiler {
         }
         let locals = fe.locals_all.clone();
         let rv = fe.ret_var;
-        Self::finish_body(&mut em.shared, &mut fb, &locals, rv, epilogue, err_blk, trace_name)?;
+        Self::finish_body(
+            &mut em.shared,
+            &mut fb,
+            &locals,
+            rv,
+            epilogue,
+            err_blk,
+            trace_name,
+        )?;
         drop(em);
         fb.seal_all_blocks();
         fb.finalize();
@@ -3374,6 +3550,7 @@ fn collect_all_fn_defs(stmts: &[Stmt], out: &mut Vec<Rc<FuncDef>>) {
                     rec_stmts(&m.body, out);
                 }
             }
+            StmtKind::Enum { .. } => {}
             StmtKind::Var { value, .. } => rec_e(value, out),
             StmtKind::ExprStmt(e) => rec_e(e, out),
             StmtKind::Block(b) => rec_stmts(b, out),
@@ -3525,6 +3702,7 @@ fn collect_assigned_idents(stmts: &[Stmt], out: &mut HashSet<String>) {
                     }
                 }
             }
+            StmtKind::Enum { .. } => {}
             StmtKind::Var { value, .. } => rec_e(value, out),
             StmtKind::ExprStmt(e) => rec_e(e, out),
             StmtKind::Block(b) => walk(b, out),
@@ -3734,7 +3912,10 @@ fn link_executable(obj: &[u8], out: &str) -> Result<(), String> {
         if st.success() {
             return Ok(());
         }
-        return Err(format!("linking failed (link.exe exited with {:?})", st.code()));
+        return Err(format!(
+            "linking failed (link.exe exited with {:?})",
+            st.code()
+        ));
     }
 
     // MinGW fallback: cc/gcc with GNU-style archive and standard libs.
@@ -3744,7 +3925,13 @@ fn link_executable(obj: &[u8], out: &str) -> Result<(), String> {
         .arg(&out_exe)
         .arg(&opath)
         .arg(&apath)
-        .args(["-lws2_32", "-ladvapi32", "-lbcrypt", "-luserenv", "-lkernel32"])
+        .args([
+            "-lws2_32",
+            "-ladvapi32",
+            "-lbcrypt",
+            "-luserenv",
+            "-lkernel32",
+        ])
         .status()
         .map_err(|e| {
             format!(
@@ -3755,7 +3942,11 @@ fn link_executable(obj: &[u8], out: &str) -> Result<(), String> {
         })?;
     let _ = std::fs::remove_dir_all(&dir);
     if !st.success() {
-        return Err(format!("linking failed ({} exited with {:?})", cc, st.code()));
+        return Err(format!(
+            "linking failed ({} exited with {:?})",
+            cc,
+            st.code()
+        ));
     }
     Ok(())
 }
