@@ -4,7 +4,7 @@
 // Everything else borrows: printing, calling, reading — never consumes.
 
 own name = "plix";
-say("hello ${name}");              // borrow: printing never consumes
+say("hello ${name}");
 say("still here: ${name}");
 
 func shout(s) {
@@ -12,7 +12,7 @@ func shout(s) {
     say("!! ${s} !!");
 }
 
-shout(name);                       // borrow
+shout(name);
 say("name survived the call: ${name}");
 
 // explicit MOVE: ownership of the string transfers to `award`
@@ -23,7 +23,7 @@ say("moved: ${award}");
 // iterating an own container consumes it — borrow with & to keep it:
 own xs = [3, 5, 7];
 auto total = 0;
-for (x in &xs) {
+ for (x in &xs) {
     total += x;
 }
 auto n = len(xs);
@@ -31,17 +31,21 @@ say("sum=${total} of ${n} items (xs still owned here)");
 
 // mutable writes under own are checked but cheap
 own acc = 100;
-for (auto i = 1; i <= 4; i = i + 1) {
+ for (auto i = 1;
+i <= 4;
+i = i + 1) {
     acc = acc + i;
-}
-say("acc = ${acc}");
 
 // owned values can be returned (the return itself is the move)
-func make_greeting() {
-    own g = { text: "salam", times: 2 };
-    return g;
 }
-own got = make_greeting();
-say("got: ${got.text} x ${got.times}");
+say("acc = ${acc}");
+func make_greeting() {
+    own g = {
+        text:"salam", times:2}
+        ;
 
-say("ownership demo: all good");
+        return g;
+    }
+    own got = make_greeting();
+    say("got: ${got.text} x ${got.times}");
+    say("ownership demo: all good");

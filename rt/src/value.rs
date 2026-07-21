@@ -135,6 +135,8 @@ fn to_repr_depth(v: V, depth: usize) -> String {
                 let _ = f;
                 "<bound method>".to_string()
             }
+            HeapObj::Buffer(_) => "<buffer>".to_string(),
+            HeapObj::ForeignLib(_) => "<foreign_lib>".to_string(),
         }
     }
 }

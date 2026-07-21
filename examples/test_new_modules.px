@@ -1,0 +1,35 @@
+// Test the three new stdlib modules: docker, security, docs
+import "docker" as docker;
+import "security" as sec;
+import "docs" as docs;
+
+// --- docker module ---
+say("docker.available:", docker.available());
+
+if (docker.available()) {
+    say("docker.images:", docker.images());
+    auto imgs = docker.images();
+    say("  code:", imgs.code);
+} else {
+    say("(docker not available on this system)");
+}
+
+// --- security module ---
+say("security.available:", sec.available());
+say("security.network:", sec.network());
+auto h = sec.hash_str("hello world");
+say("security.hash_str('hello world'):", h);
+
+sec.add_allowed_dir("/tmp");
+say("security.allowed_dirs:", sec.allowed_dirs());
+say("security.sandbox_check('/tmp/test.px'):", sec.sandbox_check("/tmp/test.px"));
+say("security.sandbox_check('/etc/shadow'):", sec.sandbox_check("/etc/shadow"));
+say("security.max_memory_mb:", sec.max_memory_mb());
+
+// --- docs module ---
+auto src = "/// Adds two numbers\nfunc add(a:int, b:int) -> int {\n    return a + b;\n}\n\n/// A point in 2D space\nstruct Point {\n    x:float,\n    y:float\n}\n";
+
+say("docs.extract:", docs.extract(src));
+say("docs.search('add'):", docs.search(src, "add"));
+say("docs.json:", docs.json(src));
+say("docs.markdown:", docs.markdown(src, "Point API"));

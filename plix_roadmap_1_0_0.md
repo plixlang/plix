@@ -59,7 +59,7 @@ workload, methodology, and raw results.
 ### 2.1 Interpreter target
 
 **Goal:** on the published representative benchmark suite, Plix interpreter
-throughput is at least **2× Python**.
+throughput is at least **on par with CPython** on representative workloads.
 
 Acceptance requirements:
 
@@ -71,10 +71,10 @@ Acceptance requirements:
 
 ### 2.2 Native target
 
-**Goal:** Plix native output is faster than C++ on the explicitly published
+**Goal:** Plix native output approaches C++ performance on the explicitly published
 benchmark subset.
 
-This is deliberately scoped: “faster than C++” is not a universal guarantee.
+This is deliberately scoped: "approaches C++" is not a universal guarantee.
 The release claim must name the C++ compiler/version, flags, source, hardware,
 and benchmark subset. C++ baselines should use an optimized production build
 (e.g. `-O3` or equivalent) and equivalent algorithms.

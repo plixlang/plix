@@ -1,4 +1,6 @@
-func main(){
-    auto x = {name:"plix", ver:0.9};
-    say(x.name, x.ver);
-}
+func main() {
+    auto x = {
+        name:"plix", ver:0.9}
+        ;
+        say(x.name, x.ver);
+    }

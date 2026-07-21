@@ -1,12 +1,12 @@
 // Python integration — libraries feel native, data stays Python-side
 // (opaque handles), calls go straight to the CPython C-API.
-import "py" as python;   // `py` is a keyword, so alias the module
+import "py" as python;
 import "sys";
 
 say("python available: ${python.available()}");
 
-import py "math" as pym;
-import py "random" as random;
+import py"math" as pym;
+import py"random" as random;
 
 say("pym.floor(3.7) = ${pym.floor(3.7)}");
 auto s2 = round(pym.sqrt(2), 4);
@@ -15,14 +15,14 @@ say("random.randint(1,100) = ${random.randint(1, 100)}");
 
 // ai.* is the Plix-branded, AI-flavoured face of the same bridge
 auto np_api = ai.lib("math");
-say("ai.call: cos(pi) = ${ai.call(np_api, \"cos\", PI)}");
+say("ai.call: cos(pi) = ${ai.call(np_api, "cos", PI)}");
 
 // quick inline Python
-say("python.eval: 2**10 = ${python.eval(\"2 ** 10\")}");
+say("python.eval: 2**10 = ${python.eval("2 ** 10")}");
 
 // numpy (optional): vectors/matrices stay in Python land at full speed
 if (python.has_module("numpy")) {
-    import py "numpy" as np;
+    import py"numpy" as np;
     auto m = np.array([[1, 2, 3], [4, 5, 6]]);
     say("numpy sum = ${m.sum()}");
     auto mn = round(m.mean(), 4);
@@ -32,6 +32,6 @@ if (python.has_module("numpy")) {
     // convert back explicitly only when wanted:
     auto t = np.arange(6).reshape(2, 3);
     say("arange(6).reshape(2,3) as plix = ${python.to_plix(t)}");
-} else {
+}  else {
     say("(numpy not installed — pip install numpy — skipping numpy demo)");
 }

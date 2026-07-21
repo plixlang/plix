@@ -413,6 +413,8 @@ unsafe fn plix_to_py(py: &Py, v: V) -> Result<Ptr, String> {
             Err("cannot pass a struct instance to python yet (use to_plix/map fields)".into())
         }
         HeapObj::Bound { .. } => Err("cannot pass a bound method to python".into()),
+        HeapObj::Buffer(_) => Err("cannot pass a buffer to python".into()),
+        HeapObj::ForeignLib(_) => Err("cannot pass a foreign library handle to python".into()),
     }
 }
 

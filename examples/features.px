@@ -12,81 +12,94 @@ say("hello ${name}, 2+2=${2 + 2}");
 auto numbers = [1, 2, 3, 4, 5];
 say("len=${len(numbers)} first=${numbers[0]} last=${numbers[-1]}");
 say("slice=${numbers[1..3]}");
-auto person = { name: "Ali", age: 25 };
-say("person: ${person["name"]} is ${person.age}");
+auto person = {
+    name:"Ali", age:25}
 
 // control flow
-if (x > 5) {
-    say("big");
-} else if (x == 5) {
-    say("five");
-} else {
-    say("small");
-}
+    ;
+    say("person: ${person["name"]} is ${person.age}");
+    if (x > 5) {
+        say("big");
+    }  else if (x == 5) {
+        say("five");
+    }  else {
 
 // loops
-auto total = 0;
-for (auto i = 0; i < 5; i = i + 1) {
-    total += i;
-}
-say("sum(for)=${total}");
+        say("small");
+    }
+    auto total = 0;
+     for (auto i = 0;
+    i < 5;
 
-auto total2 = 0;
-for (n in numbers) {
-    total2 += n;
-}
-say("sum(for-in)=${total2}");
+    i = i + 1) {
+        total += i;
+    }
+    say("sum(for)=${total}");
+    auto total2 = 0;
 
-auto c = 0;
-while (c < 3) {
-    c += 1;
-}
-say("while=${c}");
+     for (n in numbers) {
+        total2 += n;
+    }
+    say("sum(for-in)=${total2}");
+    auto c = 0;
 
 // ternary + match
-say(x > 5 ? "bigger" : "smaller");
-match (x) {
-    0 => say("zero"),
-    1 | 2 => say("one or two"),
-    _ => { say("many"); },
-}
-auto kind = match (x) {
-    10 => "ten",
-    _ => "other",
-};
-say("match value: ${kind}");
+    while (c < 3) {
+        c += 1;
+    }
+    say("while=${c}");
+    say(x > 5?"bigger":"smaller");
+    match (x) {
+        0 =>  say("zero"), 1|2 =>  say("one or two"), _ =>  {
+            say("many");
+        }
+        , }
+        auto kind = match (x) {
 
 // closures
-func make_counter() {
-    auto count = 0;
-    return func() {
-        count = count + 1;
-        return count;
-    };
-}
-auto next = make_counter();
-next();
-next();
-say("counter=${next()}");
+            10 =>  "ten", _ =>  "other", }
+            ;
+            say("match value: ${kind}");
+            func make_counter() {
+                auto count = 0;
+                return func () {
+                    count = count + 1;
+                    return count;
+                }
+                ;
+            }
 
 // default & rest params
-func greet(who = "world", emph = "") {
-    return "hello ${who}${emph}";
-}
-say(greet());
-say(greet("plix", "!"));
-func sum_all(...nums) {
-    return reduce(nums, 0, func(a, b) { return a + b; });
-}
-say("sum_all=${sum_all(1, 2, 3, 4)}");
+            auto next = make_counter();
+            next();
+            next();
+            say("counter=${next()}");
+            func greet(who = "world", emph = "") {
+                return "hello ${who}${emph}";
+            }
+            say(greet());
+            say(greet("plix", "!"));
 
 // bitwise + logical
-say("bits: ${5 & 3} ${5 | 3} ${5 ^ 3} ${1 << 4} ${~5}");
-say("logic: ${true && false} ${true || false} ${!false}");
+            func sum_all(...nums) {
+                return reduce(nums, 0, func (a, b) {
 
 // higher-order builtins
-auto squares = map(numbers, func(v) { return v * v; });
-auto evens = filter(numbers, func(v) { return v % 2 == 0; });
+                    return a + b;
+                }
+            );
+        }
+        say("sum_all=${sum_all(1, 2, 3, 4)}");
+        say("bits: ${5 & 3} ${5 | 3} ${5 ^ 3} ${1 << 4} ${~5}");
+        say("logic: ${true && false} ${true || false} ${!false}");
+        auto squares = map(numbers, func (v) {
+            return v * v;
+        }
+    );
+    auto evens = filter(numbers, func (v) {
+        return v % 2 == 0;
+    }
+);
 say("squares=${squares}");
 say("evens=${evens}");
 say("sorted=${sort([3, 1, 2])} rev=${reverse([1, 2, 3])}");

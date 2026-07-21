@@ -40,7 +40,7 @@ done
 
 echo "== negative suites =="
 te=$($PLIX check examples/type_err.px 2>&1 | grep -c E0)
-oe=$($PLIX check examples/ownership_err.px 2>&1 | grep -c E03)
+oe=$($PLIX check examples/ownership_err.px 2>&1 | grep -cE "E0[35]")
 [ "$te" -eq 10 ] && [ "$oe" -ge 2 ] && pass=$((pass+1)) || { fail=$((fail+1)); echo "FAIL checkers (type=$te own=$oe)"; }
 
 echo

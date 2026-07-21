@@ -1,2 +1,6 @@
-auto x = {a:1,b:2};
-for(k in x){say(k);}
+auto x = {
+    a:1, b:2}
+    ;
+     for (k in x) {
+        say(k);
+    }

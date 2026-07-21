@@ -1,2 +1,4 @@
-func add(a,b){return a+b;}
-say(add(2,3));
+func add(a, b) {
+    return a + b;
+}
+say(add(2, 3));

@@ -117,6 +117,10 @@ pub enum HeapObj {
         recv: V,
         f: V,
     },
+    /// Raw byte buffer for zero-copy FFI interop.
+    Buffer(Vec<u8>),
+    /// Handle to a dynamically loaded shared library (dlopen/LoadLibrary).
+    ForeignLib(*mut c_void),
 }
 
 pub struct HeapBox {
@@ -260,6 +264,17 @@ unsafe fn free_locked(v: V) {
             release_locked(*recv);
             release_locked(*f);
         }
+        HeapObj::Buffer(_) => { /* Vec<u8> dropped by Box drop */ }
+        HeapObj::ForeignLib(p) => {
+            if !p.is_null() {
+                #[cfg(unix)]
+                unsafe {
+                    let _ = libc_dlclose(*p);
+                }
+                #[cfg(not(unix))]
+                let _ = p;
+            }
+        }
         _ => {}
     }
     // reconstruct and drop the box (drops String/Vec/HashMap payloads)
@@ -392,6 +407,26 @@ pub fn mk_bound(recv: V, f: V) -> V {
     }
 }
 
+pub fn mk_buffer(data: Vec<u8>) -> V {
+    let _g = lock();
+    unsafe { alloc_locked(HeapObj::Buffer(data)) }
+}
+
+pub fn mk_foreign_lib(handle: *mut c_void) -> V {
+    let _g = lock();
+    unsafe { alloc_locked(HeapObj::ForeignLib(handle)) }
+}
+
+#[inline]
+pub fn is_buffer(v: V) -> bool {
+    is_ptr(v) && unsafe { matches!(payload(v), HeapObj::Buffer(_)) }
+}
+
+#[inline]
+pub fn is_foreign_lib(v: V) -> bool {
+    is_ptr(v) && unsafe { matches!(payload(v), HeapObj::ForeignLib(_)) }
+}
+
 /// StructInfo of a struct-def value (caller must ensure the kind).
 #[allow(static_mut_refs)]
 /// # Safety
@@ -512,6 +547,8 @@ pub fn kind_name(v: V) -> &'static str {
             HeapObj::StructDef(_) => "struct",
             HeapObj::Instance { .. } => "instance",
             HeapObj::Bound { .. } => "bound method",
+            HeapObj::Buffer(_) => "buffer",
+            HeapObj::ForeignLib(_) => "foreign_lib",
         }
     }
 }
@@ -1197,4 +1234,123 @@ pub extern "C" fn plix_variant_field(v: V, idx: i64) -> V {
         return v;
     }
     variant_field(v, idx as usize)
+}
+
+// ---------------------------------------------------------------------------
+// Platform dynamic library loading (dlopen/dlsym/dlclose on Unix,
+// LoadLibrary/GetProcAddress on Windows)
+// ---------------------------------------------------------------------------
+
+/// Open a shared library. Returns null pointer on failure.
+pub fn sys_dlopen(path: &str) -> *mut c_void {
+    #[cfg(unix)]
+    {
+        let c_path = match CString::new(path) {
+            Ok(s) => s,
+            Err(_) => return std::ptr::null_mut(),
+        };
+        unsafe { libc_dlopen(c_path.as_ptr()) }
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        let wide: Vec<u16> = std::ffi::OsStr::new(path)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        unsafe { win_LoadLibraryW(wide.as_ptr()) }
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = path;
+        std::ptr::null_mut()
+    }
+}
+
+/// Look up a symbol in a shared library. Returns null on failure.
+pub fn sys_dlsym(handle: *mut c_void, name: &str) -> *mut c_void {
+    let c_name = match CString::new(name) {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    #[cfg(unix)]
+    {
+        unsafe { libc_dlsym(handle, c_name.as_ptr()) }
+    }
+    #[cfg(windows)]
+    {
+        unsafe { win_GetProcAddress(handle, c_name.as_ptr()) }
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (handle, c_name);
+        std::ptr::null_mut()
+    }
+}
+
+/// Close a shared library handle.
+pub fn sys_dlclose(handle: *mut c_void) -> i32 {
+    #[cfg(unix)]
+    {
+        unsafe { libc_dlclose(handle) }
+    }
+    #[cfg(windows)]
+    {
+        unsafe { win_FreeLibrary(handle) as i32 }
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = handle;
+        -1
+    }
+}
+
+// Thin FFI wrappers to avoid depending on the `libc` crate.
+#[cfg(unix)]
+mod libc_raw {
+    use std::ffi::c_void;
+    extern "C" {
+        pub fn dlopen(filename: *const i8, flags: i32) -> *mut c_void;
+        pub fn dlsym(handle: *mut c_void, symbol: *const i8) -> *mut c_void;
+        pub fn dlclose(handle: *mut c_void) -> i32;
+    }
+}
+#[cfg(unix)]
+const RTLD_NOW: i32 = 2;
+
+#[cfg(unix)]
+fn libc_dlopen(path: *const i8) -> *mut c_void {
+    unsafe { libc_raw::dlopen(path, RTLD_NOW) }
+}
+#[cfg(unix)]
+fn libc_dlsym(handle: *mut c_void, name: *const i8) -> *mut c_void {
+    unsafe { libc_raw::dlsym(handle, name) }
+}
+#[cfg(unix)]
+fn libc_dlclose(handle: *mut c_void) -> i32 {
+    unsafe { libc_raw::dlclose(handle) }
+}
+
+#[cfg(windows)]
+mod win_raw {
+    use std::ffi::c_void;
+    extern "system" {
+        pub fn LoadLibraryW(lpFileName: *const u16) -> *mut c_void;
+        pub fn GetProcAddress(hModule: *mut c_void, lpProcName: *const u8) -> *mut c_void;
+        pub fn FreeLibrary(hModule: *mut c_void) -> i32;
+    }
+}
+#[cfg(windows)]
+use win_raw::*;
+#[cfg(windows)]
+fn win_LoadLibraryW(name: *const u16) -> *mut c_void {
+    unsafe { win_raw::LoadLibraryW(name) }
+}
+#[cfg(windows)]
+fn win_GetProcAddress(module: *mut c_void, name: *const u8) -> *mut c_void {
+    unsafe { win_raw::GetProcAddress(module, name) }
+}
+#[cfg(windows)]
+fn win_FreeLibrary(module: *mut c_void) -> i32 {
+    unsafe { win_raw::FreeLibrary(module) }
 }

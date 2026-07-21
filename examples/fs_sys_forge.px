@@ -15,7 +15,7 @@ auto pid = sys.pid();
 auto host = sys.hostname();
 say("pid = ${pid}, host = ${host}");
 sys.set_env("PLIX_DEMO", "1");
-say("PLIX_DEMO=${sys.env(\"PLIX_DEMO\")}");
+say("PLIX_DEMO=${sys.env("PLIX_DEMO")}");
 
 // ---- fs ----
 auto dir = "/tmp/plix_demo";
@@ -31,10 +31,10 @@ auto sz = fs.size(file);
 auto nm = fs.name(file);
 auto ex = fs.ext(file);
 say("size=${sz} bytes, name=${nm}, ext=${ex}");
-for (line in split(text, "\n")) {
+ for (line in split(text, "\n")) {
     say("  | ${line}");
 }
-for (entry in fs.list(dir)) {
+ for (entry in fs.list(dir)) {
     auto p = fs.join(dir, entry);
     auto isf = fs.is_file(p);
     say("dir entry: ${entry}  (file? ${isf})");

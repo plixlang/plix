@@ -253,3 +253,38 @@ impl Linter {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lint_unused_variable() {
+        let src = "auto x = 1;";
+        let warnings = lint_source(src, "test.px").unwrap();
+        assert!(warnings.iter().any(|w| w.code == "W0001" && w.msg.contains("unused")),
+            "expected unused variable warning, got: {warnings:?}");
+    }
+
+    #[test]
+    fn lint_used_variable_no_warning() {
+        let src = "auto x = 1; say(x);";
+        let warnings = lint_source(src, "test.px").unwrap();
+        let unused: Vec<_> = warnings.iter().filter(|w| w.code == "W0001").collect();
+        assert!(unused.is_empty(), "expected no unused-variable warnings, got: {unused:?}");
+    }
+
+    #[test]
+    fn lint_unreachable_code() {
+        let src = "func f() { return 1; say(2); }";
+        let warnings = lint_source(src, "test.px").unwrap();
+        assert!(warnings.iter().any(|w| w.code == "W0003"),
+            "expected unreachable warning, got: {warnings:?}");
+    }
+
+    #[test]
+    fn lint_valid_program_no_errors() {
+        let src = "auto x = 1; say(x);";
+        assert!(lint_source(src, "test.px").is_ok());
+    }
+}

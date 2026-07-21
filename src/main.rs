@@ -4,6 +4,7 @@
 //!   plix build  file.px -o app     compile to a standalone native executable
 //!   plix exec   file.px            compile to a temp binary and run it
 //!   plix check  file.px            syntax + ownership checks only
+//!   plix lsp                       start the Language Server Protocol server
 //!   plix repl                      interactive shell
 //!   plix --version
 
@@ -13,6 +14,7 @@ mod owncheck;
 mod codegen;
 mod fmt;
 mod interp;
+mod lsp;
 mod lexer;
 mod lint;
 mod manifest;
@@ -20,6 +22,7 @@ mod parser;
 mod resolve;
 mod token;
 mod typecheck;
+mod wasm;
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -42,6 +45,7 @@ fn main() -> ExitCode {
         "test" => cmd_test(&args[2..]),
         "fmt" => cmd_fmt(&args[2..]),
         "lint" => cmd_lint(&args[2..]),
+        "lsp" => cmd_lsp(),
         "repl" => cmd_repl(),
         "--version" | "-V" | "version" => {
             println!("plix {}", VERSION);
@@ -71,6 +75,7 @@ USAGE:
   plix test   [opts] [paths...]   run *_test.px suites (--filter, --fail-fast, --json)
   plix fmt    [--check] [paths...] format .px files
   plix lint   [paths...]          lint .px files
+  plix lsp                       start the Language Server Protocol server
   plix repl                       interactive shell
   plix --version
 
@@ -385,24 +390,55 @@ fn cmd_build(args: &[String]) -> ExitCode {
         }
     };
     let mut out = manifest_build_out().unwrap_or_else(|| "a.out".to_string());
+    let mut target = String::new();
     let mut i = 1;
     while i < args.len() {
         if (args[i] == "-o" || args[i] == "--output") && i + 1 < args.len() {
             out = args[i + 1].clone();
+            i += 2;
+        } else if args[i] == "--target" && i + 1 < args.len() {
+            target = args[i + 1].clone();
             i += 2;
         } else {
             i += 1;
         }
     }
     let name = path.display().to_string();
-    match codegen::compile_to_executable(&src, &name, &out) {
-        Ok(()) => {
-            println!("✓ built native executable: {}", out);
-            ExitCode::SUCCESS
+
+    if target == "wasm" {
+        // WASM output
+        let wasm_out = if out.ends_with(".wasm") { out } else { out + ".wasm" };
+        match wasm::compile_source(&src, &name) {
+            Ok(bytes) => {
+                match std::fs::write(&wasm_out, &bytes) {
+                    Ok(()) => {
+                        println!("✓ built wasm module: {} ({} bytes)", wasm_out, bytes.len());
+                        ExitCode::SUCCESS
+                    }
+                    Err(e) => {
+                        eprintln!("cannot write {}: {}", wasm_out, e);
+                        ExitCode::FAILURE
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("{}", e);
+                ExitCode::FAILURE
+            }
         }
-        Err(e) => {
-            eprintln!("{}", e);
-            ExitCode::FAILURE
+    } else if !target.is_empty() {
+        eprintln!("error: unsupported target '{}' (supported: wasm)", target);
+        ExitCode::FAILURE
+    } else {
+        match codegen::compile_to_executable(&src, &name, &out) {
+            Ok(()) => {
+                println!("✓ built native executable: {}", out);
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("{}", e);
+                ExitCode::FAILURE
+            }
         }
     }
 }
@@ -553,6 +589,11 @@ fn cmd_check(args: &[String]) -> ExitCode {
 // ---------------------------------------------------------------------------
 // REPL
 // ---------------------------------------------------------------------------
+
+fn cmd_lsp() -> ExitCode {
+    lsp::run_server();
+    ExitCode::SUCCESS
+}
 
 fn cmd_repl() -> ExitCode {
     println!("plix {} repl — :quit to exit, :help for commands", VERSION);

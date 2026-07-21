@@ -11,7 +11,7 @@ func cube(x) {
 
 func sumlist(xs) {
     auto t = 0;
-    for (x in xs) {
+     for (x in xs) {
         t = t + x;
     }
     return t;

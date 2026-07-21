@@ -3,7 +3,7 @@
 // type guards wherever a dynamic value crosses into typed land.
 
 // --- fully typed recursion -----------------------------------------------
-func fib(n: int) -> int {
+func fib(n:int) -> int {
     if (n <= 1) {
         return n;
     }
@@ -11,111 +11,118 @@ func fib(n: int) -> int {
 }
 
 // --- typed accumulators in a C-style loop ---------------------------------
-func sum_to(n: int) -> int {
-    auto total: int = 0;
-    for (auto i: int = 1; i <= n; i += 1) {
+func sum_to(n:int) -> int {
+    auto total:int = 0;
+     for (auto i:int = 1;
+    i <= n;
+    i += 1) {
         total += i;
     }
-    return total;
-}
 
 // --- typed for-in element + raw compound float ----------------------------
-func average(nums: array) -> float {
-    auto total: float = 0.0;
-    for (x in nums) {
-        total += x; // dynamic element -> boundary guard -> raw float add
-    }
-    return total / len(nums);
+    return total;
 }
+func average(nums:array) -> float {
+    auto total:float = 0.0;
+     for (x in nums) {
+        total += x;
+    }
 
 // --- typed for-in header ---------------------------------------------------
-func dot(a: array, b: array) -> float {
-    auto acc: float = 0.0;
-    auto i: int = 0;
-    for (v: int in a) {
+    return total / len(nums);
+}
+func dot(a:array, b:array) -> float {
+    auto acc:float = 0.0;
+    auto i:int = 0;
+     for (v:int in a) {
         acc += v * b[i];
         i += 1;
     }
-    return acc;
-}
 
 // --- typed bools, bitwise, shifts, ternary --------------------------------
-func pack_flags(a: int, b: int) -> int {
-    auto hi: int = (a & 0xff) << 8;
-    auto lo: int = b & 0xff;
-    auto both: bool = (hi != 0) && (lo != 0);
-    return both ? hi | lo | 0x8000 : hi | lo;
+    return acc;
 }
+func pack_flags(a:int, b:int) -> int {
+    auto hi:int = (a&255)<<8;
+    auto lo:int = b&255;
+    auto both:bool = (hi != 0) && (lo != 0);
 
 // --- match on a typed value (raw arm binding) ------------------------------
-func classify(n: int) -> str {
-    auto tag: str = match n {
-        0 => "zero",
-        1 => "one",
-        _ => "many",
-    };
-    return tag;
+    return both?hi|lo|32768:hi|lo;
 }
-
-func parity(n: int) -> str {
-    match n % 2 {
-        0 => { return "even"; },
-        _ => { return "odd"; },
+func classify(n:int) -> str {
+    auto tag:str = match n {
+        0 =>  "zero", 1 =>  "one", _ =>  "many", }
+        ;
+        return tag;
     }
-}
+
+    func parity(n:int) -> str {
+        match n % 2 {
+            0 =>  {
+                return "even";
+            }
+            , _ =>  {
 
 // --- typed struct fields + methods ----------------------------------------
-struct Vec2 { x: float, y: float, name: str = "v" }
+                return "odd";
 
-impl Vec2 {
-    func new(x: float, y: float) {
-        return Vec2 { x: x, y: y };
-    }
-    func norm2(&self) -> float {
-        return self.x * self.x + self.y * self.y;
-    }
-    func scale(&mut self, k: float) {
-        self.x = self.x * k;
-        self.y = self.y * k;
-    }
-    func repr(&self) -> str {
-        return "${self.name}(${self.x}, ${self.y})";
-    }
-}
+            }
+            , }
+        }
+        struct Vec2 {
+            x:float, y:float, name:str = "v"}
+            impl Vec2 {
+                func new(x:float, y:float) {
+                    return Vec2 {
+                        x:x, y:y}
+                        ;
+                    }
+                    func norm2(&self) -> float {
+                        return self.x * self.x + self.y * self.y;
+                    }
+                    func scale(&mut self, k:float) {
 
 // --- dynamic <-> typed boundary both ways ----------------------------------
-func mixed(x) {
+                        self.x = self.x * k;
     // x is dynamic; the annotation forces a guard at the store
-    auto n: int = x;
-    auto m: int = n * n - 2 * n + 1;
-    return m; // typed value flows back into dynamic land
-}
+                        self.y = self.y * k;
+                    }
+                    func repr(&self) -> str {
+                        return "${self.name}(${self.x}, ${self.y})";
 
-auto start = clock();
+                    }
 
-say("fib(20)      = ${fib(20)}");
-say("sum_to(1000) = ${sum_to(1000)}");
+                }
+                func mixed(x) {
 
-auto xs = [1, 2, 2, 3, 5, 7];
-say("average(xs)  = ${average(xs)}");
+                    auto n:int = x;
+                    auto m:int = n * n - 2 * n + 1;
 
-auto u = [1, 2, 3];
-auto w = [4, 5, 6];
-say("dot(u, w)    = ${dot(u, w)}");
+                    return m;
+                }
+                auto start = clock();
 
-say("pack_flags(3, 2) = ${pack_flags(3, 2)}");
-say("pack_flags(0, 2) = ${pack_flags(0, 2)}");
+                say("fib(20)      = ${fib(20)}");
+                say("sum_to(1000) = ${sum_to(1000)}");
 
-say("classify(0)  = ${classify(0)}");
-say("classify(9)  = ${classify(9)}");
-say("parity(7)    = ${parity(7)}");
+                auto xs = [1, 2, 2, 3, 5, 7];
+                say("average(xs)  = ${average(xs)}");
+                auto u = [1, 2, 3];
 
-auto v = Vec2(3.0, 4.0);
-say("repr         = ${v.repr()}");
-say("norm2        = ${v.norm2()}");
-v.scale(2.0);
-say("scaled       = ${v.repr()} (norm2 ${v.norm2()})");
+                auto w = [4, 5, 6];
+                say("dot(u, w)    = ${dot(u, w)}");
+                say("pack_flags(3, 2) = ${pack_flags(3, 2)}");
+                say("pack_flags(0, 2) = ${pack_flags(0, 2)}");
+                say("classify(0)  = ${classify(0)}");
 
-say("mixed(41)    = ${mixed(41)}");
+                say("classify(9)  = ${classify(9)}");
 
-say("elapsed: ${round(clock() - start, 3)}s");
+                say("parity(7)    = ${parity(7)}");
+                auto v = Vec2(3.0, 4.0);
+                say("repr         = ${v.repr()}");
+                say("norm2        = ${v.norm2()}");
+                v.scale(2.0);
+                say("scaled       = ${v.repr()} (norm2 ${v.norm2()})");
+                say("mixed(41)    = ${mixed(41)}");
+                say("elapsed: ${round(clock() - start, 3)}s");

@@ -103,16 +103,29 @@ fn strict_int_arith(op: BinOp, a: V, b: V) -> Option<Result<V, String>> {
     }
     let x = heap::as_int(a);
     let y = heap::as_int(b);
-    let (r, what) = match op {
+    let (r, _what) = match op {
         BinOp::Add => (x.checked_add(y), "addition"),
         BinOp::Sub => (x.checked_sub(y), "subtraction"),
         _ => (x.checked_mul(y), "multiplication"),
     };
     Some(match r {
-        // typed ints are *62-bit* exactly like dynamic ints: exceeding the
-        // dynamic range is an overflow error, not a silent float promotion
+        // Result fits in a tagged int — normal path.
         Some(v) if (INT_DOMAIN_MIN..=INT_DOMAIN_MAX).contains(&v) => Ok(heap::mk_int(v)),
-        _ => Err(format!("integer overflow in typed int {}", what)),
+        // i64 overflow or beyond tagged range: promote to float for
+        // parity with the native backend's dynamic-slot semantics.
+        // The native backend wraps dynamic (auto) slots as tagged
+        // values, and when the Cranelift int_checked guard fires it
+        // falls back to the runtime's float-promotion path — the
+        // interpreter must do the same to remain observably identical.
+        _ => {
+            let fv = match op {
+                BinOp::Add => x as f64 + y as f64,
+                BinOp::Sub => x as f64 - y as f64,
+                BinOp::Mul => x as f64 * y as f64,
+                _ => unreachable!(),
+            };
+            Ok(plixrt::heap::mk_float_unchecked(fv))
+        }
     })
 }
 

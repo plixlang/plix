@@ -1,2 +1,2 @@
-import "ai";
-say(ai_call("hello"));
+import "ai" as ai;
+say(ai.call(ai.lib("math"), "cos", PI));
