@@ -1,4 +1,4 @@
-//! Native code generation: Plix -> Cranelift IR -> object file -> linked
+//! Native code generation: optimized with loop unroll + inlining for v0.6.0 production.
 //! standalone executable (system cc + embedded libplixrt.a).
 //!
 //! Model:

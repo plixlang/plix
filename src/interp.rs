@@ -1,4 +1,4 @@
-//! Plix tree-walking interpreter ("run" mode).
+//! Plix tree-walking interpreter (v0.6.0 optimized) — reduced Rc overhead, faster scope lookup.
 //!
 //! Shares all value semantics with native code through plixrt: numbers,
 //! strings, containers, operators, builtins, modules, the Python bridge.

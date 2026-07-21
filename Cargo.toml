@@ -19,7 +19,7 @@ cranelift-native = "0.122"
 plixrt = { path = "rt" }
 
 [profile.release]
-opt-level = 2
+opt-level = 3
 lto = "thin"
 strip = true
 
