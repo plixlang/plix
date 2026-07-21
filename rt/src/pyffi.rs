@@ -1,3 +1,7 @@
+#![allow(
+    clippy::missing_transmute_annotations,
+    reason = "The dynamic CPython loader resolves heterogeneous symbols through one type-erased dlsym helper; each destination type is fixed by its API field."
+)]
 //! Python bridge for Plix — talks to CPython directly through its stable C
 //! API, loaded at runtime with dlopen/dlsym. No pyo3, no build-time Python
 //! headers, no link flags: `plix` binaries stay self-contained and detect
@@ -631,7 +635,9 @@ pub fn exec(src: &str) -> Result<(), String> {
 }
 
 /// Call a raw callable handle with Plix args.
-pub fn py_call_handle(callable: Ptr, args: &[V]) -> OpResult {
+/// # Safety
+/// The caller must provide a live CPython callable pointer and hold a valid ownership reference according to CPython rules.
+pub unsafe fn py_call_handle(callable: Ptr, args: &[V]) -> OpResult {
     let py = api()?;
     let g = gil()?;
     let _ = &g;
@@ -641,9 +647,8 @@ pub fn py_call_handle(callable: Ptr, args: &[V]) -> OpResult {
             return Err(fetch_err(py));
         }
         for (i, &a) in args.iter().enumerate() {
-            let pa = plix_to_py(py, a).map_err(|e| {
+            let pa = plix_to_py(py, a).inspect_err(|_e| {
                 (py.DecRef)(t);
-                e
             })?;
             (py.Tuple_SetItem)(t, i as i64, pa);
         }
@@ -656,11 +661,15 @@ pub fn py_call_handle(callable: Ptr, args: &[V]) -> OpResult {
     }
 }
 
-pub fn py_call_bound(callable: Ptr, _name: &CString, args: &[V]) -> OpResult {
+/// # Safety
+/// The caller must provide a live CPython callable pointer and hold a valid ownership reference according to CPython rules.
+pub unsafe fn py_call_bound(callable: Ptr, _name: &CString, args: &[V]) -> OpResult {
     py_call_handle(callable, args)
 }
 
-pub fn py_getattr(obj: Ptr, name: &str) -> OpResult {
+/// # Safety
+/// The caller must provide a live CPython object pointer and hold a valid ownership reference according to CPython rules.
+pub unsafe fn py_getattr(obj: Ptr, name: &str) -> OpResult {
     let py = api()?;
     let g = gil()?;
     let _ = &g;
@@ -675,7 +684,9 @@ pub fn py_getattr(obj: Ptr, name: &str) -> OpResult {
     }
 }
 
-pub fn py_setattr(obj: Ptr, name: &str, val: V) -> OpResult {
+/// # Safety
+/// The caller must provide a live CPython object pointer and hold a valid ownership reference according to CPython rules.
+pub unsafe fn py_setattr(obj: Ptr, name: &str, val: V) -> OpResult {
     let py = api()?;
     let g = gil()?;
     let _ = &g;
@@ -714,7 +725,9 @@ unsafe fn payload_opt_pub(v: V) -> Option<&'static HeapObj> {
     }
 }
 
-pub fn py_index_get(obj: Ptr, idx: V) -> OpResult {
+/// # Safety
+/// The caller must provide a live CPython object pointer and hold a valid ownership reference according to CPython rules.
+pub unsafe fn py_index_get(obj: Ptr, idx: V) -> OpResult {
     let py = api()?;
     let g = gil()?;
     let _ = &g;
@@ -735,7 +748,9 @@ pub fn py_index_get(obj: Ptr, idx: V) -> OpResult {
     }
 }
 
-pub fn py_index_set(obj: Ptr, idx: V, val: V) -> OpResult {
+/// # Safety
+/// The caller must provide a live CPython object pointer and hold a valid ownership reference according to CPython rules.
+pub unsafe fn py_index_set(obj: Ptr, idx: V, val: V) -> OpResult {
     let py = api()?;
     let g = gil()?;
     let _ = &g;
@@ -752,7 +767,9 @@ pub fn py_index_set(obj: Ptr, idx: V, val: V) -> OpResult {
     }
 }
 
-pub fn py_len(obj: Ptr) -> OpResult {
+/// # Safety
+/// The caller must provide a live CPython object pointer and hold a valid ownership reference according to CPython rules.
+pub unsafe fn py_len(obj: Ptr) -> OpResult {
     let py = api()?;
     let g = gil()?;
     let _ = &g;
@@ -822,7 +839,9 @@ pub fn repr_val(v: V) -> String {
 }
 
 /// repr of a raw handle; safe when python is unavailable.
-pub fn py_repr_handle(p: Ptr) -> String {
+/// # Safety
+/// The caller must provide a live CPython object pointer and hold a valid ownership reference according to CPython rules.
+pub unsafe fn py_repr_handle(p: Ptr) -> String {
     let py = match api() {
         Ok(p) => p,
         Err(_) => return "<pyobject>".into(),

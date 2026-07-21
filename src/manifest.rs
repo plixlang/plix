@@ -151,3 +151,49 @@ fn parse_string_array(v: &str, line: usize) -> Result<Vec<String>, String> {
     }
     Ok(out)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_project_manifest_and_quoted_comments() {
+        let manifest = parse_manifest(
+            r#"
+            [package]
+            name = "demo # still part of the name"
+            version = "1.2.3"
+            [build]
+            entry = "src/main.px"
+            out = "target/demo"
+            [test]
+            paths = ["tests", "specs/unit"] # ignored comment
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            manifest.package_name.as_deref(),
+            Some("demo # still part of the name")
+        );
+        assert_eq!(manifest.package_version.as_deref(), Some("1.2.3"));
+        assert_eq!(manifest.build_entry.as_deref(), Some("src/main.px"));
+        assert_eq!(manifest.build_out.as_deref(), Some("target/demo"));
+        assert_eq!(manifest.test_paths, vec!["tests", "specs/unit"]);
+    }
+
+    #[test]
+    fn rejects_non_string_manifest_values() {
+        let err = parse_manifest("[package]\nname = unquoted").unwrap_err();
+        assert_eq!(err, "line 2: expected string literal");
+    }
+
+    #[test]
+    fn finds_manifest_from_nested_directory() {
+        let root = std::env::temp_dir().join(format!("plix-manifest-test-{}", std::process::id()));
+        let nested = root.join("a/b");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(root.join("plix.toml"), "[package]\nname = \"demo\"").unwrap();
+        assert_eq!(Manifest::find_from(&nested), Some(root.join("plix.toml")));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}

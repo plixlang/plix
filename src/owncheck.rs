@@ -319,7 +319,7 @@ impl Ctx {
     /// end of statement: all borrows expire
     fn reset_borrows(&mut self) {
         for m in self.scopes.iter_mut() {
-            for (_, v) in m.iter_mut() {
+            for v in m.values_mut() {
                 match v.st {
                     St::IBorrow(_) | St::MBorrow => v.st = St::Live,
                     _ => {}
@@ -614,7 +614,7 @@ impl Ctx {
 
     fn clear_reassign_flags(&mut self) {
         for m in self.scopes.iter_mut() {
-            for (_, v) in m.iter_mut() {
+            for v in m.values_mut() {
                 v.reassigned_in_loop = false;
             }
         }

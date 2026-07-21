@@ -1,3 +1,4 @@
+/// Versioned API documentation marker for editor and tooling integrations.
 pub fn api_docs() -> String {
-    "Full API docs v0.8.0".into()
+    format!("Full API docs v{}", env!("CARGO_PKG_VERSION"))
 }

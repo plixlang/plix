@@ -8,6 +8,7 @@
 
 use crate::token::{StrPart, Tok, Token, keyword};
 
+#[derive(Debug)]
 pub struct LexError {
     pub msg: String,
     pub line: u32,
@@ -488,5 +489,69 @@ impl<'a> Lexer<'a> {
             parts.push(StrPart::Lit(cur));
         }
         Ok(Token::new(Tok::Str(parts), line, col))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tokens(src: &str) -> Vec<Tok> {
+        lex(src)
+            .unwrap()
+            .into_iter()
+            .map(|token| token.tok)
+            .collect()
+    }
+
+    #[test]
+    fn lexes_numeric_bases_and_float_exponent() {
+        assert_eq!(
+            tokens("0xff 0b1010 0o17 1_000 2.5e+2"),
+            vec![
+                Tok::Int(255),
+                Tok::Int(10),
+                Tok::Int(15),
+                Tok::Int(1_000),
+                Tok::Float(250.0),
+                Tok::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn preserves_string_interpolation_parts() {
+        assert_eq!(
+            tokens("\"hello ${name + 1}!\""),
+            vec![
+                Tok::Str(vec![
+                    StrPart::Lit("hello ".into()),
+                    StrPart::Expr("name + 1".into()),
+                    StrPart::Lit("!".into()),
+                ]),
+                Tok::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn skips_comments_and_tracks_next_token_location() {
+        let result = lex("// comment\n/* block */\nauto value = 1;").unwrap();
+        assert_eq!(result[0].tok, Tok::Auto);
+        assert_eq!((result[0].span.line, result[0].span.col), (3, 1));
+        assert_eq!(result[1].tok, Tok::Ident("value".into()));
+    }
+
+    #[test]
+    fn rejects_unterminated_block_comment() {
+        let err = lex("/* never closed").unwrap_err();
+        assert_eq!(err.msg, "unterminated block comment");
+        assert_eq!((err.line, err.col), (1, 1));
+    }
+
+    #[test]
+    fn rejects_invalid_base_literal() {
+        let err = lex("0b102").unwrap_err();
+        assert_eq!(err.msg, "invalid b literal");
     }
 }

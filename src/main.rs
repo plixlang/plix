@@ -25,7 +25,8 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-const VERSION: &str = "0.5.0";
+/// The CLI version is derived from Cargo metadata so release metadata cannot drift.
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
@@ -124,9 +125,9 @@ fn collect_test_files(dir: &PathBuf, out: &mut Vec<PathBuf>) {
         let is_dir = p.is_dir();
         if is_dir {
             // skip tool/build scratch dirs
-            match p.file_name().and_then(|n| n.to_str()) {
-                Some("target" | ".git" | "node_modules") => continue,
-                _ => {}
+            if let Some("target" | ".git" | "node_modules") = p.file_name().and_then(|n| n.to_str())
+            {
+                continue;
             }
             collect_test_files(&p, out);
         } else if p.extension().map(|e| e == "px").unwrap_or(false)

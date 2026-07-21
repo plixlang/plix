@@ -1,3 +1,7 @@
+#![allow(
+    clippy::map_entry,
+    reason = "The duplicate-method diagnostic needs to preserve the existing map entry unchanged."
+)]
 //! Plix gradual type checker (v0.3).
 //!
 //! Type annotations are optional: unannotated positions are `any` (the

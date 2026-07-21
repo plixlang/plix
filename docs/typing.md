@@ -1,4 +1,4 @@
-# Gradual Typing in Plix (v0.3)
+# Gradual typing in Plix
 
 Plix is a **gradually typed** language: every value carries its type, and you
 add *static* types exactly where they pay off — hot loops, public APIs,

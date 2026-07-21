@@ -1,6 +1,6 @@
-# Plix Tooling & Project System (v0.5)
+# Plix tooling and project system
 
-Plix v0.5 adds first-class project tooling while keeping single-file scripts
+Plix supports first-class project tooling while keeping single-file scripts
 working exactly as before.
 
 ## Project manifest: `plix.toml`

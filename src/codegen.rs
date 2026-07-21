@@ -1,9 +1,14 @@
-//! Native code generation v0.8.0: PGO + full LTO + loop vectorization enabled
+#![allow(
+    clippy::too_many_arguments,
+    clippy::drop_non_drop,
+    reason = "Code generator helpers share a deliberately explicit compilation context; temporary drops delimit builder borrows."
+)]
+//! Native code generation v0.9.5: native code generation
 //! standalone executable (system cc + embedded libplixrt.a).
 //!
 //! Model:
 //!   - every Plix function compiles to one native function with ABI
-//!       fn(cells: *const V, args: *const V, nargs: i64) -> V
+//!     fn(cells: *const V, args: *const V, nargs: i64) -> V
 //!   - `V` is the 64-bit tagged value of the runtime; ints stay unboxed, so
 //!     int arithmetic / comparisons are inlined, everything else calls the
 //!     shared runtime (the same semantics the interpreter uses);
@@ -1050,12 +1055,8 @@ impl<'a> Emit<'a> {
                 self.guard(b, err_blk)?;
                 match sty {
                     STy::Int => {
-                        let raw = self.unbox_int_guard(
-                            b,
-                            ret,
-                            err_blk,
-                            &format!("return of typed function"),
-                        )?;
+                        let raw =
+                            self.unbox_int_guard(b, ret, err_blk, "return of typed function")?;
                         Ok(Some(RawVal::I(raw)))
                     }
                     STy::Float => {
@@ -1349,10 +1350,7 @@ impl<'a> Emit<'a> {
         sb: STy,
     ) -> CResult<CVal> {
         let numeric = |t: STy| matches!(t, STy::Int | STy::Float);
-        let eq = match op {
-            BinOp::Eq => true,
-            _ => false,
-        };
+        let eq = matches!(op, BinOp::Eq);
         let i8v = if sa == STy::Int && sb == STy::Int {
             let ra = self.emit_raw(b, fe, a, epilogue, err_blk)?;
             let rb = self.emit_raw(b, fe, c, epilogue, err_blk)?;
@@ -2764,10 +2762,8 @@ impl<'a> Emit<'a> {
         for (id, (n, unit)) in self.fn_name_of.iter() {
             if n == name && *unit == 0 {
                 if let Some(r) = self.res.fns.get(id) {
-                    if r.captures.is_empty() {
-                        if matches!(self.res.globals.get(name), Some(_)) {
-                            return Some(*id);
-                        }
+                    if r.captures.is_empty() && self.res.globals.contains_key(name) {
+                        return Some(*id);
                     }
                 }
             }
@@ -3346,15 +3342,7 @@ impl Compiler {
         let locals = fe.locals_all.clone();
         let rv = fe.ret_var;
         let tname = def.name.clone();
-        Self::finish_body(
-            &mut em.shared,
-            &mut fb,
-            &locals,
-            rv,
-            epilogue,
-            err_blk,
-            &tname,
-        )?;
+        Self::finish_body(em.shared, &mut fb, &locals, rv, epilogue, err_blk, &tname)?;
         drop(em);
         fb.seal_all_blocks();
         fb.finalize();
@@ -3455,13 +3443,7 @@ impl Compiler {
         let locals = fe.locals_all.clone();
         let rv = fe.ret_var;
         Self::finish_body(
-            &mut em.shared,
-            &mut fb,
-            &locals,
-            rv,
-            epilogue,
-            err_blk,
-            trace_name,
+            em.shared, &mut fb, &locals, rv, epilogue, err_blk, trace_name,
         )?;
         drop(em);
         fb.seal_all_blocks();
@@ -3595,11 +3577,8 @@ fn collect_all_fn_defs(stmts: &[Stmt], out: &mut Vec<Rc<FuncDef>>) {
                     }
                 }
             }
-            StmtKind::Return(e) => {
-                if let Some(x) = e {
-                    rec_e(x, out);
-                }
-            }
+            StmtKind::Return(Some(x)) => rec_e(x, out),
+            StmtKind::Return(None) => {}
             _ => {}
         }
     }
@@ -3747,11 +3726,8 @@ fn collect_assigned_idents(stmts: &[Stmt], out: &mut HashSet<String>) {
                     }
                 }
             }
-            StmtKind::Return(e) => {
-                if let Some(x) = e {
-                    rec_e(x, out);
-                }
-            }
+            StmtKind::Return(Some(x)) => rec_e(x, out),
+            StmtKind::Return(None) => {}
             _ => {}
         }
     }

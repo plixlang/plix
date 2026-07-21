@@ -84,9 +84,10 @@ pub fn collect_px_files(path: &Path, out: &mut Vec<PathBuf>) {
     for ent in rd.flatten() {
         let p = ent.path();
         if p.is_dir() {
-            match p.file_name().and_then(|n| n.to_str()) {
-                Some("target" | ".git" | "node_modules" | "examples_bin") => continue,
-                _ => {}
+            if let Some("target" | ".git" | "node_modules" | "examples_bin") =
+                p.file_name().and_then(|n| n.to_str())
+            {
+                continue;
             }
             collect_px_files(&p, out);
         } else if p.extension().map(|e| e == "px").unwrap_or(false) {

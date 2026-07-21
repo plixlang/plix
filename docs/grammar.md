@@ -1,7 +1,7 @@
-# Plix Language Grammar (v0.3)
+# Plix language grammar
 
 Complete EBNF reference. Terminals are in `"quotes"`. Plix source is UTF-8;
-identifiers are `[A-Za-z_][A-Za-z0-9_]*`. New in v0.3: type annotations,
+identifiers are `[A-Za-z_][A-Za-z0-9_]*`. The language supports type annotations,
 `struct` / `impl` / `trait`, struct literals.
 
 ```

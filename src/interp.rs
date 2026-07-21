@@ -1,4 +1,9 @@
-//! Plix tree-walking interpreter v0.9.0 — optimized: faster scope lookup, reduced Rc overhead
+#![allow(
+    clippy::match_single_binding,
+    clippy::explicit_counter_loop,
+    reason = "The explicit forms make interpreter control-flow and argument diagnostics easier to audit."
+)]
+//! Plix tree-walking interpreter v0.9.5
 //!
 //! Shares all value semantics with native code through plixrt: numbers,
 //! strings, containers, operators, builtins, modules, the Python bridge.
@@ -40,9 +45,9 @@ fn scope_get(env: &Env, name: &str) -> Option<Rc<RefCell<Slot>>> {
             Some(s) => return Some(s),
             None => {
                 let parent = cur.borrow().parent.clone();
-                match parent {
-                    Some(p) => cur = p,
-                    None => return None,
+                {
+                    let p = parent?;
+                    cur = p
                 }
             }
         }
@@ -106,7 +111,7 @@ fn strict_int_arith(op: BinOp, a: V, b: V) -> Option<Result<V, String>> {
     Some(match r {
         // typed ints are *62-bit* exactly like dynamic ints: exceeding the
         // dynamic range is an overflow error, not a silent float promotion
-        Some(v) if v >= INT_DOMAIN_MIN && v <= INT_DOMAIN_MAX => Ok(heap::mk_int(v)),
+        Some(v) if (INT_DOMAIN_MIN..=INT_DOMAIN_MAX).contains(&v) => Ok(heap::mk_int(v)),
         _ => Err(format!("integer overflow in typed int {}", what)),
     })
 }
@@ -1127,9 +1132,8 @@ impl Interpreter {
         }
         // native stdlib module? alias it into the scope
         if builtins::global_names().contains(&module) && !module.ends_with(".px") {
-            match scope_get(&self.globals, module) {
-                Some(s) => return Ok(heap::use_var(s.borrow().v)),
-                None => {}
+            if let Some(s) = scope_get(&self.globals, module) {
+                return Ok(heap::use_var(s.borrow().v));
             }
         }
         // plix source file

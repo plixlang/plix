@@ -259,7 +259,6 @@ unsafe fn global_install_locked(name: &str, v: V) {
         let n = crate::heap::globals_count_locked();
         if i < n {
             crate::heap::global_set_locked(i, v);
-            return;
         }
     }
     // slot not present (interpreter path uses scopes instead) — harmless.
@@ -484,7 +483,7 @@ fn b_int(_c: &mut dyn Caller, args: &[V]) -> OpResult {
                 if f.is_finite() {
                     return Ok(mk_int(f.trunc() as i64));
                 }
-                return err("int: cannot convert non-finite float");
+                err("int: cannot convert non-finite float")
             }
             HeapObj::Str(s) => {
                 if let Ok(i) = s.trim().parse::<i64>() {
@@ -493,7 +492,7 @@ fn b_int(_c: &mut dyn Caller, args: &[V]) -> OpResult {
                 if let Ok(f) = s.trim().parse::<f64>() {
                     return Ok(mk_int(f.trunc() as i64));
                 }
-                return err(format!("int: cannot parse \"{}\"", s));
+                err(format!("int: cannot parse \"{}\"", s))
             }
             _ => err(format!("int: cannot convert {}", kind_name(v))),
         }
@@ -595,7 +594,7 @@ fn b_pow(_c: &mut dyn Caller, args: &[V]) -> OpResult {
     let b = want_num(args[1], "pow")?;
     if is_int(args[0]) && is_int(args[1]) {
         let e = as_int(args[1]);
-        if e >= 0 && e < 63 {
+        if (0..63).contains(&e) {
             let x = as_int(args[0]);
             if let Some(r) = x.checked_pow(e as u32) {
                 return Ok(mk_int(r));
@@ -1533,7 +1532,7 @@ fn ai_shape(_c: &mut dyn Caller, args: &[V]) -> OpResult {
 // ---------------------------------------------------------------------------
 
 fn forge_version(_c: &mut dyn Caller, _args: &[V]) -> OpResult {
-    Ok(mk_str_from("plix 0.2.0 (rust runtime)"))
+    Ok(mk_str_from("plix 0.9.5 (rust runtime)"))
 }
 fn forge_rust_version(_c: &mut dyn Caller, _args: &[V]) -> OpResult {
     match std::process::Command::new("rustc")

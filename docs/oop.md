@@ -1,4 +1,4 @@
-# Structs, impls and traits — Plix OOP (v0.3)
+# Structs, impls, and traits
 
 Plix's object model is **Rust's model in Plix clothes**: data and behavior
 are separate, there is **no data inheritance**, and shared abstractions are

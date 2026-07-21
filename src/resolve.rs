@@ -1,3 +1,7 @@
+#![allow(
+    clippy::needless_range_loop,
+    reason = "Resolver diagnostics need the frame index as well as the frame value."
+)]
 //! Static name resolution for the native compiler.
 //!
 //! For every function in the program computes:

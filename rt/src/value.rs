@@ -187,7 +187,7 @@ fn eq_depth(a: V, b: V, depth: usize) -> bool {
             (Some(HeapObj::Map(x)), Some(HeapObj::Map(y))) => {
                 x.len() == y.len()
                     && x.iter()
-                        .all(|(k, &v)| y.get(k).map_or(false, |&w| eq_depth(v, w, depth + 1)))
+                        .all(|(k, &v)| y.get(k).is_some_and(|&w| eq_depth(v, w, depth + 1)))
             }
             (
                 Some(HeapObj::Instance {
@@ -313,7 +313,7 @@ pub fn mul(a: V, b: V) -> OpResult {
     unsafe {
         if let (Some(HeapObj::Str(s)), true) = (payload_opt(a), is_int(b)) {
             let n = as_int(b);
-            if n >= 0 && n < (1 << 24) {
+            if (0..(1 << 24)).contains(&n) {
                 return Ok(mk_string(s.repeat(n as usize)));
             }
         }
@@ -629,7 +629,7 @@ pub fn value_fits(v: V, ty: &str) -> bool {
 
 #[inline]
 fn is_kind(v: V, f: impl FnOnce(&HeapObj) -> bool) -> bool {
-    unsafe { payload_opt(v).map(|o| f(o)).unwrap_or(false) }
+    unsafe { payload_opt(v).map(f).unwrap_or(false) }
 }
 
 #[inline]
@@ -703,12 +703,10 @@ fn coerce_field(val: V, ft: &FieldInfo) -> Result<V, String> {
 
 /// Array pseudo-methods: arr.length  (kept tiny; functions live in builtins).
 fn builtin_array_member(name: &str) -> OpResult {
-    match name {
-        _ => Err(format!(
-            "array has no member \"{}\" (try a function like len, push, map)",
-            name
-        )),
-    }
+    Err(format!(
+        "array has no member \"{}\" (try a function like len, push, map)",
+        name
+    ))
 }
 fn builtin_str_member(name: &str) -> OpResult {
     let _ = name;
@@ -995,8 +993,10 @@ pub extern "C" fn plix_str_of(v: V) -> V {
     mk_string(to_display(v))
 }
 
+/// # Safety
+/// For a positive `n`, `p` must point to at least `n` readable Plix values for the duration of this call.
 #[no_mangle]
-pub extern "C" fn plix_array_new(p: *const V, n: i64) -> V {
+pub unsafe extern "C" fn plix_array_new(p: *const V, n: i64) -> V {
     if err_flag() {
         return 0;
     }
@@ -1013,8 +1013,10 @@ pub extern "C" fn plix_map_new() -> V {
     mk_map(std::collections::HashMap::new())
 }
 
+/// # Safety
+/// For a positive `klen`, `kp` must point to a readable UTF-8 byte range of `klen` bytes. `m` must be a live Plix map value.
 #[no_mangle]
-pub extern "C" fn plix_map_set(m: V, kp: *const std::ffi::c_char, klen: i64, val: V) -> V {
+pub unsafe extern "C" fn plix_map_set(m: V, kp: *const std::ffi::c_char, klen: i64, val: V) -> V {
     if err_flag() {
         return 0;
     }
@@ -1034,8 +1036,10 @@ pub extern "C" fn plix_map_set(m: V, kp: *const std::ffi::c_char, klen: i64, val
     }
 }
 
+/// # Safety
+/// For a positive `nlen`, `np` must point to a readable UTF-8 byte range of `nlen` bytes.
 #[no_mangle]
-pub extern "C" fn plix_member(v: V, np: *const std::ffi::c_char, nlen: i64) -> V {
+pub unsafe extern "C" fn plix_member(v: V, np: *const std::ffi::c_char, nlen: i64) -> V {
     if err_flag() {
         return 0;
     }
@@ -1054,8 +1058,15 @@ pub extern "C" fn plix_member(v: V, np: *const std::ffi::c_char, nlen: i64) -> V
     }
 }
 
+/// # Safety
+/// For a positive `nlen`, `np` must point to a readable UTF-8 byte range of `nlen` bytes.
 #[no_mangle]
-pub extern "C" fn plix_member_set(v: V, np: *const std::ffi::c_char, nlen: i64, val: V) -> V {
+pub unsafe extern "C" fn plix_member_set(
+    v: V,
+    np: *const std::ffi::c_char,
+    nlen: i64,
+    val: V,
+) -> V {
     if err_flag() {
         return 0;
     }
@@ -1090,8 +1101,10 @@ pub extern "C" fn plix_slice(v: V, s: i64, has_s: i64, e: i64, has_e: i64) -> V 
     }
 }
 
+/// # Safety
+/// For a positive `nargs`, `args` must point to at least `nargs` readable Plix values for the duration of this call.
 #[no_mangle]
-pub extern "C" fn plix_call(f: V, args: *const V, nargs: i64) -> V {
+pub unsafe extern "C" fn plix_call(f: V, args: *const V, nargs: i64) -> V {
     if err_flag() {
         return 0;
     }
@@ -1145,8 +1158,10 @@ pub extern "C" fn plix_forin_iter(v: V) -> V {
     }
 }
 
+/// # Safety
+/// For a positive `ncells`, `cells` must point to at least `ncells` readable Plix values. For a positive `namelen`, `namep` must point to a readable UTF-8 byte range.
 #[no_mangle]
-pub extern "C" fn plix_closure_new(
+pub unsafe extern "C" fn plix_closure_new(
     code: u64,
     cells: *const V,
     ncells: i64,

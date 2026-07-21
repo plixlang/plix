@@ -174,6 +174,8 @@ unsafe fn heap(v: V) -> &'static HeapBox {
 
 /// Allocate a heap object. rc = 1, owned by the current arena.
 #[allow(static_mut_refs)]
+/// # Safety
+/// The runtime lock must be held and the current arena must exist.
 pub unsafe fn alloc_locked(obj: HeapObj) -> V {
     let b = Box::new(HeapBox {
         rc: Cell::new(1),
@@ -185,6 +187,8 @@ pub unsafe fn alloc_locked(obj: HeapObj) -> V {
 }
 
 #[allow(static_mut_refs)]
+/// # Safety
+/// The runtime lock must be held and any pointer-valued `v` must refer to a live runtime allocation.
 pub unsafe fn retain_locked(v: V) {
     if is_ptr(v) {
         let b = heap(v);
@@ -193,6 +197,8 @@ pub unsafe fn retain_locked(v: V) {
 }
 
 #[allow(static_mut_refs)]
+/// # Safety
+/// The runtime lock must be held and any pointer-valued `v` must refer to a live runtime allocation with a positive reference count.
 pub unsafe fn release_locked(v: V) {
     if !is_ptr(v) {
         return;
@@ -217,7 +223,7 @@ unsafe fn free_locked(v: V) {
             }
         }
         HeapObj::Map(m) => {
-            for (_, &c) in m.iter() {
+            for &c in m.values() {
                 release_locked(c);
             }
         }
@@ -235,11 +241,11 @@ unsafe fn free_locked(v: V) {
             for f in &info.fields {
                 release_locked(f.default);
             }
-            for (_, &m) in info.methods.iter() {
+            for &m in info.methods.values() {
                 release_locked(m);
             }
-            for (_, tbl) in info.traits.iter() {
-                for (_, &m) in tbl.iter() {
+            for tbl in info.traits.values() {
+                for &m in tbl.values() {
                     release_locked(m);
                 }
             }
@@ -265,7 +271,7 @@ unsafe fn free_locked(v: V) {
 // ---------------------------------------------------------------------------
 
 pub fn mk_int(i: i64) -> V {
-    if i >= INT_MIN && i <= INT_MAX {
+    if (INT_MIN..=INT_MAX).contains(&i) {
         ((i as u64) << 1) | 1
     } else {
         mk_float(i as f64)
@@ -314,8 +320,10 @@ pub fn mk_map(m: HashMap<String, V>) -> V {
 
 /// Same, with the runtime lock already held by the caller.
 #[allow(static_mut_refs)]
+/// # Safety
+/// The runtime lock must be held and every pointer value in `m` must be live.
 pub unsafe fn mk_map_locked(m: HashMap<String, V>) -> V {
-    for (_, &val) in m.iter() {
+    for &val in m.values() {
         retain_locked(val);
     }
     alloc_locked(HeapObj::Map(m))
@@ -386,6 +394,8 @@ pub fn mk_bound(recv: V, f: V) -> V {
 
 /// StructInfo of a struct-def value (caller must ensure the kind).
 #[allow(static_mut_refs)]
+/// # Safety
+/// The runtime lock must be held and any pointer-valued `def` must refer to a live runtime allocation.
 pub unsafe fn struct_info(def: V) -> Option<&'static StructInfo> {
     if !is_ptr(def) {
         return None;
@@ -398,6 +408,8 @@ pub unsafe fn struct_info(def: V) -> Option<&'static StructInfo> {
 
 /// StructInfo of the defining struct of an instance value.
 #[allow(static_mut_refs)]
+/// # Safety
+/// The runtime lock must be held and any pointer-valued `inst` must refer to a live runtime allocation.
 pub unsafe fn instance_info(inst: V) -> Option<&'static StructInfo> {
     if !is_ptr(inst) {
         return None;
@@ -413,11 +425,15 @@ pub unsafe fn instance_info(inst: V) -> Option<&'static StructInfo> {
 // ---------------------------------------------------------------------------
 
 #[allow(static_mut_refs)]
+/// # Safety
+/// The runtime lock must be held and `v` must be a live pointer-valued runtime allocation.
 pub unsafe fn payload(v: V) -> &'static HeapObj {
     &*(heap(v).obj.get())
 }
 
 #[allow(static_mut_refs)]
+/// # Safety
+/// The runtime lock must be held, `v` must be live, and callers must preserve aliasing rules for the returned pointer.
 pub unsafe fn payload_mut(v: V) -> *mut HeapObj {
     heap(v).obj.get()
 }
@@ -540,6 +556,8 @@ pub fn as_f64_checked(v: V) -> Result<f64, String> {
 }
 
 /// If `v` is an instance, the name of its struct.
+/// # Safety
+/// The runtime lock must be held and any pointer-valued `v` must be live.
 pub unsafe fn struct_name_of(v: V) -> Option<String> {
     if let HeapObj::Instance { def, .. } = payload_opt_pub(v)? {
         if let Some(info) = struct_info(*def) {
@@ -551,6 +569,8 @@ pub unsafe fn struct_name_of(v: V) -> Option<String> {
 
 /// payload_opt made available crate-wide (was private in value.rs).
 #[allow(static_mut_refs)]
+/// # Safety
+/// The runtime lock must be held and any pointer-valued `v` must be live.
 pub unsafe fn payload_opt_pub(v: V) -> Option<&'static HeapObj> {
     if is_ptr(v) {
         Some(payload(v))
@@ -629,6 +649,8 @@ pub fn global_set(i: usize, v: V) {
 
 /// Lock must already be held.
 #[allow(static_mut_refs)]
+/// # Safety
+/// The runtime lock must be held and `i` must index an existing global slot.
 pub unsafe fn global_set_locked(i: usize, v: V) {
     retain_locked(v);
     let old = st().globals[i];
@@ -647,6 +669,8 @@ pub fn global_get(i: usize) -> V {
 /// Take a temporary reference to `v` valid until the next arena rewind.
 /// Retains `v` and gives the arena the retain.
 #[allow(static_mut_refs)]
+/// # Safety
+/// The runtime lock must be held and any pointer-valued `v` must be live.
 pub unsafe fn use_locked(v: V) -> V {
     if is_ptr(v) {
         retain_locked(v);
@@ -692,6 +716,8 @@ pub fn globals_count() -> usize {
 
 /// Same, with the runtime lock already held by the caller.
 #[allow(static_mut_refs)]
+/// # Safety
+/// The runtime lock must be held.
 pub unsafe fn globals_count_locked() -> usize {
     st().globals.len()
 }
@@ -821,8 +847,10 @@ pub extern "C" fn plix_err_flag() -> i64 {
     }
 }
 
+/// # Safety
+/// The caller must pass either a null pointer with a non-positive length, or a valid readable UTF-8 byte range of `len` bytes.
 #[no_mangle]
-pub extern "C" fn plix_set_error(p: *const c_char, len: i64) {
+pub unsafe extern "C" fn plix_set_error(p: *const c_char, len: i64) {
     set_error(unsafe { cstr(p, len) }.to_string());
 }
 
@@ -831,8 +859,10 @@ pub extern "C" fn plix_print_error() {
     print_error_and_clear();
 }
 
+/// # Safety
+/// The caller must pass either a null pointer with a non-positive length, or a valid readable UTF-8 byte range of `len` bytes.
 #[no_mangle]
-pub extern "C" fn plix_trace_push(p: *const c_char, len: i64) {
+pub unsafe extern "C" fn plix_trace_push(p: *const c_char, len: i64) {
     trace_push(unsafe { cstr(p, len) });
 }
 
@@ -909,8 +939,10 @@ pub extern "C" fn plix_cell_set(cell: V, v: V) {
     }
 }
 
+/// # Safety
+/// The caller must pass either a null pointer with a non-positive length, or a valid readable UTF-8 byte range of `len` bytes.
 #[no_mangle]
-pub extern "C" fn plix_str_new(p: *const c_char, len: i64) -> V {
+pub unsafe extern "C" fn plix_str_new(p: *const c_char, len: i64) -> V {
     mk_str_from(unsafe { cstr(p, len) })
 }
 
@@ -969,13 +1001,17 @@ pub fn structdef_add_method(def: V, trait_name: Option<&str>, name: &str, fv: V)
     }
 }
 
+/// # Safety
+/// The caller must pass either a null pointer with a non-positive length, or a valid readable UTF-8 byte range of `len` bytes.
 #[no_mangle]
-pub extern "C" fn plix_struct_new(p: *const c_char, len: i64) -> V {
+pub unsafe extern "C" fn plix_struct_new(p: *const c_char, len: i64) -> V {
     structdef_new(unsafe { cstr(p, len) }.to_string())
 }
 
+/// # Safety
+/// The caller must provide valid readable UTF-8 ranges for each non-empty name/type pointer and length pair. `def` must be a live Plix struct definition value.
 #[no_mangle]
-pub extern "C" fn plix_struct_field(
+pub unsafe extern "C" fn plix_struct_field(
     def: V,
     kp: *const c_char,
     kl: i64,
@@ -993,8 +1029,10 @@ pub extern "C" fn plix_struct_field(
     def
 }
 
+/// # Safety
+/// The caller must provide valid readable UTF-8 ranges for each non-empty name/trait pointer and length pair. `def` must be a live Plix struct definition value.
 #[no_mangle]
-pub extern "C" fn plix_struct_method(
+pub unsafe extern "C" fn plix_struct_method(
     def: V,
     kp: *const c_char,
     kl: i64,
@@ -1014,8 +1052,10 @@ pub extern "C" fn plix_struct_method(
 
 /// Build an instance from a packed C-string of '\0'-separated field names
 /// plus a parallel values array.
+/// # Safety
+/// The caller must provide readable `names` and `vals` ranges for positive lengths. `def` must be a live Plix struct definition value.
 #[no_mangle]
-pub extern "C" fn plix_instance_new(
+pub unsafe extern "C" fn plix_instance_new(
     def: V,
     names: *const c_char,
     nlen: i64,
@@ -1124,14 +1164,18 @@ pub fn variant_field(v: V, idx: usize) -> V {
     }
 }
 
+/// # Safety
+/// The caller must pass either a null pointer with a non-positive length, or a valid readable UTF-8 byte range of `len` bytes.
 #[no_mangle]
-pub extern "C" fn plix_variant_new(p: *const c_char, len: i64) -> V {
+pub unsafe extern "C" fn plix_variant_new(p: *const c_char, len: i64) -> V {
     let name = unsafe { cstr(p, len) };
     mk_variant(name, NULL, false)
 }
 
+/// # Safety
+/// The caller must pass either a null pointer with a non-positive length, or a valid readable UTF-8 byte range of `len` bytes.
 #[no_mangle]
-pub extern "C" fn plix_variant_is(v: V, p: *const c_char, len: i64) -> i64 {
+pub unsafe extern "C" fn plix_variant_is(v: V, p: *const c_char, len: i64) -> i64 {
     let name = unsafe { cstr(p, len) };
     if name == "Some" {
         return if !is_null(v) { 1 } else { 0 };

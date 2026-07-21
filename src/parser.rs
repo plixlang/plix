@@ -1,3 +1,7 @@
+#![allow(
+    clippy::while_let_loop,
+    reason = "The parser loop keeps operator discovery and source-span capture adjacent."
+)]
 //! Plix parser: recursive descent with precedence climbing.
 //!
 //! Covers the complete v0.2 grammar: variables (auto/const/own), functions
@@ -1394,5 +1398,40 @@ trait MapSubject {
 impl MapSubject for (Expr, Vec<MatchArm>) {
     fn map_subject(self, subject: Expr) -> (Expr, Vec<MatchArm>) {
         (subject, self.1)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_typed_function_and_struct_literal() {
+        let program = parse_file(
+            "func add(a: int, b: int) -> int { return a + b; }\nauto p = Point { x: 1, y: 2 };",
+        )
+        .unwrap();
+        assert_eq!(program.len(), 2);
+        assert!(matches!(program[0].node, StmtKind::Func(_)));
+        assert!(matches!(program[1].node, StmtKind::Var { .. }));
+    }
+
+    #[test]
+    fn parses_nested_generic_type_closers() {
+        let program = parse_file("auto items: array<array<int>> = [[1]];").unwrap();
+        assert_eq!(program.len(), 1);
+    }
+
+    #[test]
+    fn reports_missing_semicolon_with_location() {
+        let err = parse_file("auto x = 1").unwrap_err();
+        assert!(err.msg.contains("expected ';'"));
+        assert_eq!((err.span.line, err.span.col), (1, 11));
+    }
+
+    #[test]
+    fn interpolation_requires_a_complete_expression() {
+        let err = parse_file("auto greeting = \"hello ${}\";").unwrap_err();
+        assert!(err.msg.contains("in interpolation"));
     }
 }

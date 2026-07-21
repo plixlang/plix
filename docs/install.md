@@ -20,12 +20,12 @@ Linux/macOS: unpack and run the installer:
 ```sh
 tar xzf plix-*.tar.gz
 cd plix-*
-./install.sh            # installs to /usr/local/bin (PREFIX=/opt ./install.sh to change)
+./install.sh            # installs to ~/.local (PREFIX=/opt ./install.sh to change)
 plix --version
 ```
 
-Windows: unpack the zip and add the folder to your `PATH` (or call
-`plix.exe` in place).
+Windows: unpack the zip, then run `./install.ps1` in PowerShell (or add the
+`bin` folder to your `PATH` and call `plix.exe` directly).
 
 ### What `plix run` needs at runtime
 
@@ -61,7 +61,7 @@ Programs **without** `py`/`ai` imports never touch Python.
 
 ## Building from source
 
-Needs [Rust](https://rustup.rs) (stable, 1.75+ — requires the 2021 edition)
+Needs [Rust](https://rustup.rs) (stable Rust 1.85+ (the toolchain uses Rust 2024 edition))
 and the C linker shown above. Then:
 
 ```bash
@@ -87,7 +87,7 @@ install -Dm755 target/release/plix ~/.local/bin/plix     # or /usr/local/bin
 ## Verifying an install
 
 ```bash
-plix --version                       # plix 0.3.0
+plix --version                       # plix 0.9.5
 plix run examples/typed.px           # interpreter
 plix build examples/typed.px -o /tmp/typed && /tmp/typed   # native path
 ```

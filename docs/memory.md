@@ -72,7 +72,7 @@ check). Everything else calls the shared runtime — the same code the
 interpreter uses, so semantics are *identical* in both modes. `plix build`
 links a real `main()` + `libplixrt.a` into a standalone ELF executable.
 
-### Specialization (v0.3)
+### Specialization
 
 Locals whose type is *provably* `int`/`float`/`bool` for their entire
 lifetime — annotated (`auto i: int`) or inferred (`auto i = 0`) — are
@@ -83,7 +83,7 @@ dynamic value entering a typed slot), where a runtime guard verifies the
 type in the interpreter and the compiled binary alike. Raw slots never
 escape: boxed views are materialized on demand for captures/calls.
 
-## Struct instances (v0.3)
+## Struct instances
 
 An instance (`p = Point { x: 1.0, y: 2.0 }`) is a single heap object:
 the struct descriptor + one flat vector of field values. It follows the
@@ -101,7 +101,7 @@ exact same rules as an array under each keyword:
 
 ## Reality notes / current limits
 
-- ARC is **not** cycle-collecting in v0.2 (self-referential structures
+- ARC is **not** cycle-collecting (self-referential structures
   leak; acyclic data is fully reclaimed).
 - The `own` checker treats whole containers as one unit (no per-element
   borrow splitting like Rust's).
