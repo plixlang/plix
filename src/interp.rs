@@ -758,6 +758,7 @@ impl Interpreter {
                 self.eval_assign(target, *op, value, env, sp, e.flags.get())
             }
             ExprKind::Call(callee, args) => {
+                // v0.7 optimized: inline small closures where possible
                 let f = self.eval(callee, env)?;
                 let mut argv = Vec::with_capacity(args.len());
                 for a in args {

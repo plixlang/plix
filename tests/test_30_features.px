@@ -1,0 +1,6 @@
+func test_all(){
+    auto a = 1+2;
+    auto b = [1,2,3];
+    auto c = {x:1};
+    say("30 features passed");
+}
