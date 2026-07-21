@@ -1,1 +1,3 @@
-pub fn jit_compile(func: &str) -> String { format!("JIT:{}", func) }
+pub fn jit_compile(func: &str) -> String {
+    format!("JIT:{}", func)
+}

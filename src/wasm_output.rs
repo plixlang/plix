@@ -1,1 +1,3 @@
-pub fn wasm_output() -> String { "wasm_output".into() }
+pub fn wasm_output() -> String {
+    "wasm_output".into()
+}

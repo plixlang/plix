@@ -1,1 +1,3 @@
-pub fn concurrency_spawn() -> String { "thread_spawned".into() }
+pub fn concurrency_spawn() -> String {
+    "thread_spawned".into()
+}
