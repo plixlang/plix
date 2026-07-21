@@ -97,7 +97,11 @@ const OP_F64_NEG: u8 = 0x9A;
 // ---------------------------------------------------------------------------
 
 #[derive(Clone, Copy, PartialEq)]
-enum ValKind { I32, I64, F64 }
+enum ValKind {
+    I32,
+    I64,
+    F64,
+}
 
 struct WasmFunc {
     name: String,
@@ -180,21 +184,31 @@ impl WasmGen {
     fn compile(&mut self, stmts: &[ast::Stmt]) -> Result<(), String> {
         // WASI fd_write import: (fd, iov_ptr, iov_count, nwritten_ptr) -> i32
         let fd_write_type = self.add_type(vec![I32, I32, I32, I32], vec![I32]);
-        self.imports.push(("wasi_snapshot_preview1".into(), "fd_write".into(), fd_write_type));
+        self.imports.push((
+            "wasi_snapshot_preview1".into(),
+            "fd_write".into(),
+            fd_write_type,
+        ));
 
         // WASI proc_exit: (code) -> ()
         let proc_exit_type = self.add_type(vec![I32], vec![]);
-        self.imports.push(("wasi_snapshot_preview1".into(), "proc_exit".into(), proc_exit_type));
+        self.imports.push((
+            "wasi_snapshot_preview1".into(),
+            "proc_exit".into(),
+            proc_exit_type,
+        ));
 
         let import_count = self.imports.len() as u32;
 
         // Helper function types
-        self.say_int_type = self.add_type(vec![I32], vec![]);       // __plix_say_int(i32)
-        self.say_str_type = self.add_type(vec![I32, I32], vec![]);  // __plix_say_str(i32, i32)
+        self.say_int_type = self.add_type(vec![I32], vec![]); // __plix_say_int(i32)
+        self.say_str_type = self.add_type(vec![I32, I32], vec![]); // __plix_say_str(i32, i32)
 
         // Register helpers — say_int at import_count, say_str at import_count+1
-        self.func_name_to_idx.insert("__plix_say_int".into(), import_count);
-        self.func_name_to_idx.insert("__plix_say_str".into(), import_count + 1);
+        self.func_name_to_idx
+            .insert("__plix_say_int".into(), import_count);
+        self.func_name_to_idx
+            .insert("__plix_say_str".into(), import_count + 1);
 
         // First pass: register all function names so calls resolve
         let mut func_defs = Vec::new();
@@ -227,7 +241,8 @@ impl WasmGen {
         // Exports
         for (i, f) in self.functions.iter().enumerate() {
             if f.name == "main" || f.name == "_start" {
-                self.exports.push((f.name.clone(), 0, import_count + i as u32));
+                self.exports
+                    .push((f.name.clone(), 0, import_count + i as u32));
             }
         }
         self.exports.push(("memory".into(), 2, 0));
@@ -269,128 +284,204 @@ impl WasmGen {
         b.push(I32);
 
         // Pre-store '\n' at offset 56
-        b.push(OP_I32_CONST); b.push(56); // addr
-        b.push(OP_I32_CONST); b.push(10); // '\n'
-        b.push(0x3A); b.push(0x00); b.push(0x00); // i32.store8
+        b.push(OP_I32_CONST);
+        b.push(56); // addr
+        b.push(OP_I32_CONST);
+        b.push(10); // '\n'
+        b.push(0x3A);
+        b.push(0x00);
+        b.push(0x00); // i32.store8
 
         // write_pos = 55 (last byte of scratch buffer)
-        b.push(OP_I32_CONST); b.push(55);
-        b.push(OP_LOCAL_SET); b.push(0x01);
+        b.push(OP_I32_CONST);
+        b.push(55);
+        b.push(OP_LOCAL_SET);
+        b.push(0x01);
 
         // is_negative = 0
-        b.push(OP_I32_CONST); b.push(0x00);
-        b.push(OP_LOCAL_SET); b.push(0x02);
+        b.push(OP_I32_CONST);
+        b.push(0x00);
+        b.push(OP_LOCAL_SET);
+        b.push(0x02);
 
         // digit_count = 0
-        b.push(OP_I32_CONST); b.push(0x00);
-        b.push(OP_LOCAL_SET); b.push(0x03);
+        b.push(OP_I32_CONST);
+        b.push(0x00);
+        b.push(OP_LOCAL_SET);
+        b.push(0x03);
 
         // Check if negative: if value < 0, set is_negative=1, negate value
-        b.push(OP_LOCAL_GET); b.push(0x00);
-        b.push(OP_I32_CONST); b.push(0x00);
+        b.push(OP_LOCAL_GET);
+        b.push(0x00);
+        b.push(OP_I32_CONST);
+        b.push(0x00);
         b.push(OP_I32_LT_S);
-        b.push(OP_IF); b.push(0x40); // void
-            b.push(OP_I32_CONST); b.push(0x01);
-            b.push(OP_LOCAL_SET); b.push(0x02); // is_negative = 1
-            b.push(OP_I32_CONST); b.push(0x00);
-            b.push(OP_LOCAL_GET); b.push(0x00);
-            b.push(OP_I32_SUB); // 0 - value
-            b.push(OP_LOCAL_SET); b.push(0x00); // value = -value
+        b.push(OP_IF);
+        b.push(0x40); // void
+        b.push(OP_I32_CONST);
+        b.push(0x01);
+        b.push(OP_LOCAL_SET);
+        b.push(0x02); // is_negative = 1
+        b.push(OP_I32_CONST);
+        b.push(0x00);
+        b.push(OP_LOCAL_GET);
+        b.push(0x00);
+        b.push(OP_I32_SUB); // 0 - value
+        b.push(OP_LOCAL_SET);
+        b.push(0x00); // value = -value
         b.push(OP_END);
 
         // Special case: value == 0 → write '0'
-        b.push(OP_LOCAL_GET); b.push(0x00);
+        b.push(OP_LOCAL_GET);
+        b.push(0x00);
         b.push(OP_I32_EQZ);
-        b.push(OP_IF); b.push(0x40);
-            // store8: push addr, then val
-            b.push(OP_LOCAL_GET); b.push(0x01); // addr = write_pos
-            b.push(OP_I32_CONST); b.push(48);   // '0'
-            b.push(0x3A); b.push(0x00); b.push(0x00); // i32.store8
-            // write_pos--
-            b.push(OP_LOCAL_GET); b.push(0x01);
-            b.push(OP_I32_CONST); b.push(1);
-            b.push(OP_I32_SUB);
-            b.push(OP_LOCAL_SET); b.push(0x01);
-            // digit_count++
-            b.push(OP_LOCAL_GET); b.push(0x03);
-            b.push(OP_I32_CONST); b.push(1);
-            b.push(OP_I32_ADD);
-            b.push(OP_LOCAL_SET); b.push(0x03);
+        b.push(OP_IF);
+        b.push(0x40);
+        // store8: push addr, then val
+        b.push(OP_LOCAL_GET);
+        b.push(0x01); // addr = write_pos
+        b.push(OP_I32_CONST);
+        b.push(48); // '0'
+        b.push(0x3A);
+        b.push(0x00);
+        b.push(0x00); // i32.store8
+        // write_pos--
+        b.push(OP_LOCAL_GET);
+        b.push(0x01);
+        b.push(OP_I32_CONST);
+        b.push(1);
+        b.push(OP_I32_SUB);
+        b.push(OP_LOCAL_SET);
+        b.push(0x01);
+        // digit_count++
+        b.push(OP_LOCAL_GET);
+        b.push(0x03);
+        b.push(OP_I32_CONST);
+        b.push(1);
+        b.push(OP_I32_ADD);
+        b.push(OP_LOCAL_SET);
+        b.push(0x03);
         b.push(OP_ELSE);
-            // Loop: while value != 0, extract least-significant digit
-            b.push(OP_LOOP); b.push(0x40);
-                b.push(OP_LOCAL_GET); b.push(0x00);
-                b.push(OP_I32_EQZ);
-                b.push(OP_BR_IF); b.push(0x01); // break if value == 0
+        // Loop: while value != 0, extract least-significant digit
+        b.push(OP_LOOP);
+        b.push(0x40);
+        b.push(OP_LOCAL_GET);
+        b.push(0x00);
+        b.push(OP_I32_EQZ);
+        b.push(OP_BR_IF);
+        b.push(0x01); // break if value == 0
 
-                // store8 at write_pos: push addr first, then value
-                b.push(OP_LOCAL_GET); b.push(0x01); // addr = write_pos
-                b.push(OP_LOCAL_GET); b.push(0x00); // value
-                b.push(OP_I32_CONST); b.push(10);
-                b.push(OP_I32_REM_S); // digit = value % 10
-                b.push(OP_I32_CONST); b.push(48);
-                b.push(OP_I32_ADD); // digit + '0'
-                b.push(0x3A); b.push(0x00); b.push(0x00); // i32.store8
+        // store8 at write_pos: push addr first, then value
+        b.push(OP_LOCAL_GET);
+        b.push(0x01); // addr = write_pos
+        b.push(OP_LOCAL_GET);
+        b.push(0x00); // value
+        b.push(OP_I32_CONST);
+        b.push(10);
+        b.push(OP_I32_REM_S); // digit = value % 10
+        b.push(OP_I32_CONST);
+        b.push(48);
+        b.push(OP_I32_ADD); // digit + '0'
+        b.push(0x3A);
+        b.push(0x00);
+        b.push(0x00); // i32.store8
 
-                // value = value / 10
-                b.push(OP_LOCAL_GET); b.push(0x00);
-                b.push(OP_I32_CONST); b.push(10);
-                b.push(OP_I32_DIV_S);
-                b.push(OP_LOCAL_SET); b.push(0x00);
+        // value = value / 10
+        b.push(OP_LOCAL_GET);
+        b.push(0x00);
+        b.push(OP_I32_CONST);
+        b.push(10);
+        b.push(OP_I32_DIV_S);
+        b.push(OP_LOCAL_SET);
+        b.push(0x00);
 
-                // write_pos--
-                b.push(OP_LOCAL_GET); b.push(0x01);
-                b.push(OP_I32_CONST); b.push(1);
-                b.push(OP_I32_SUB);
-                b.push(OP_LOCAL_SET); b.push(0x01);
+        // write_pos--
+        b.push(OP_LOCAL_GET);
+        b.push(0x01);
+        b.push(OP_I32_CONST);
+        b.push(1);
+        b.push(OP_I32_SUB);
+        b.push(OP_LOCAL_SET);
+        b.push(0x01);
 
-                // digit_count++
-                b.push(OP_LOCAL_GET); b.push(0x03);
-                b.push(OP_I32_CONST); b.push(1);
-                b.push(OP_I32_ADD);
-                b.push(OP_LOCAL_SET); b.push(0x03);
+        // digit_count++
+        b.push(OP_LOCAL_GET);
+        b.push(0x03);
+        b.push(OP_I32_CONST);
+        b.push(1);
+        b.push(OP_I32_ADD);
+        b.push(OP_LOCAL_SET);
+        b.push(0x03);
 
-                b.push(OP_BR); b.push(0x00); // continue
-            b.push(OP_END); // end loop
+        b.push(OP_BR);
+        b.push(0x00); // continue
+        b.push(OP_END); // end loop
         b.push(OP_END); // end if value==0
 
         // If was negative, write '-' at write_pos
-        b.push(OP_LOCAL_GET); b.push(0x02); // is_negative
-        b.push(OP_IF); b.push(0x40);
-            b.push(OP_LOCAL_GET); b.push(0x01); // addr
-            b.push(OP_I32_CONST); b.push(45);   // '-'
-            b.push(0x3A); b.push(0x00); b.push(0x00); // i32.store8
-            // write_pos--
-            b.push(OP_LOCAL_GET); b.push(0x01);
-            b.push(OP_I32_CONST); b.push(1);
-            b.push(OP_I32_SUB);
-            b.push(OP_LOCAL_SET); b.push(0x01);
-            // digit_count++
-            b.push(OP_LOCAL_GET); b.push(0x03);
-            b.push(OP_I32_CONST); b.push(1);
-            b.push(OP_I32_ADD);
-            b.push(OP_LOCAL_SET); b.push(0x03);
+        b.push(OP_LOCAL_GET);
+        b.push(0x02); // is_negative
+        b.push(OP_IF);
+        b.push(0x40);
+        b.push(OP_LOCAL_GET);
+        b.push(0x01); // addr
+        b.push(OP_I32_CONST);
+        b.push(45); // '-'
+        b.push(0x3A);
+        b.push(0x00);
+        b.push(0x00); // i32.store8
+        // write_pos--
+        b.push(OP_LOCAL_GET);
+        b.push(0x01);
+        b.push(OP_I32_CONST);
+        b.push(1);
+        b.push(OP_I32_SUB);
+        b.push(OP_LOCAL_SET);
+        b.push(0x01);
+        // digit_count++
+        b.push(OP_LOCAL_GET);
+        b.push(0x03);
+        b.push(OP_I32_CONST);
+        b.push(1);
+        b.push(OP_I32_ADD);
+        b.push(OP_LOCAL_SET);
+        b.push(0x03);
         b.push(OP_END);
 
         // Set up iov: ptr = write_pos + 1, len = digit_count + 1 (include '\n')
-        b.push(OP_I32_CONST); b.push(0x00); // addr for iov.ptr
-        b.push(OP_LOCAL_GET); b.push(0x01);
-        b.push(OP_I32_CONST); b.push(1);
+        b.push(OP_I32_CONST);
+        b.push(0x00); // addr for iov.ptr
+        b.push(OP_LOCAL_GET);
+        b.push(0x01);
+        b.push(OP_I32_CONST);
+        b.push(1);
         b.push(OP_I32_ADD); // write_pos + 1 = first digit position
-        b.push(0x36); b.push(0x02); b.push(0x00); // i32.store align=2 offset=0
+        b.push(0x36);
+        b.push(0x02);
+        b.push(0x00); // i32.store align=2 offset=0
 
-        b.push(OP_I32_CONST); b.push(0x04); // addr for iov.len
-        b.push(OP_LOCAL_GET); b.push(0x03); // digit_count
-        b.push(OP_I32_CONST); b.push(1);
+        b.push(OP_I32_CONST);
+        b.push(0x04); // addr for iov.len
+        b.push(OP_LOCAL_GET);
+        b.push(0x03); // digit_count
+        b.push(OP_I32_CONST);
+        b.push(1);
         b.push(OP_I32_ADD); // digit_count + 1 (for '\n')
-        b.push(0x36); b.push(0x02); b.push(0x00); // i32.store align=2 offset=0
+        b.push(0x36);
+        b.push(0x02);
+        b.push(0x00); // i32.store align=2 offset=0
 
         // Call fd_write(1, 0, 1, 60)
-        b.push(OP_I32_CONST); b.push(1); // fd = stdout
-        b.push(OP_I32_CONST); b.push(0); // iov_ptr
-        b.push(OP_I32_CONST); b.push(1); // iov_count = 1
-        b.push(OP_I32_CONST); b.extend_from_slice(&leb128_signed(60)); // nwritten_ptr
-        b.push(OP_CALL); b.extend_from_slice(&leb128(0)); // fd_write (import 0)
+        b.push(OP_I32_CONST);
+        b.push(1); // fd = stdout
+        b.push(OP_I32_CONST);
+        b.push(0); // iov_ptr
+        b.push(OP_I32_CONST);
+        b.push(1); // iov_count = 1
+        b.push(OP_I32_CONST);
+        b.extend_from_slice(&leb128_signed(60)); // nwritten_ptr
+        b.push(OP_CALL);
+        b.extend_from_slice(&leb128(0)); // fd_write (import 0)
         b.push(OP_DROP);
 
         b.push(OP_END); // end function
@@ -400,7 +491,12 @@ impl WasmGen {
             type_idx,
             body: b,
             n_params: 1,
-            local_names: vec!["value".into(), "write_pos".into(), "is_negative".into(), "digit_count".into()],
+            local_names: vec![
+                "value".into(),
+                "write_pos".into(),
+                "is_negative".into(),
+                "digit_count".into(),
+            ],
             local_kinds: vec![ValKind::I32; 4],
         }
     }
@@ -443,43 +539,73 @@ impl WasmGen {
 
         // --- First fd_write: write the string itself ---
         // Set up iov: ptr = offset (param 0), len = length (param 1)
-        b.push(OP_I32_CONST); b.push(0x00); // addr for iov.ptr
-        b.push(OP_LOCAL_GET); b.push(0x00); // offset
-        b.push(0x36); b.push(0x02); b.push(0x00); // i32.store align=2 offset=0
+        b.push(OP_I32_CONST);
+        b.push(0x00); // addr for iov.ptr
+        b.push(OP_LOCAL_GET);
+        b.push(0x00); // offset
+        b.push(0x36);
+        b.push(0x02);
+        b.push(0x00); // i32.store align=2 offset=0
 
-        b.push(OP_I32_CONST); b.push(0x04); // addr for iov.len
-        b.push(OP_LOCAL_GET); b.push(0x01); // length
-        b.push(0x36); b.push(0x02); b.push(0x00); // i32.store align=2 offset=0
+        b.push(OP_I32_CONST);
+        b.push(0x04); // addr for iov.len
+        b.push(OP_LOCAL_GET);
+        b.push(0x01); // length
+        b.push(0x36);
+        b.push(0x02);
+        b.push(0x00); // i32.store align=2 offset=0
 
         // fd_write(1, 0, 1, 60) — write string
-        b.push(OP_I32_CONST); b.push(1); // fd = stdout
-        b.push(OP_I32_CONST); b.push(0); // iov_ptr
-        b.push(OP_I32_CONST); b.push(1); // iov_count = 1
-        b.push(OP_I32_CONST); b.extend_from_slice(&leb128_signed(60)); // nwritten_ptr
-        b.push(OP_CALL); b.extend_from_slice(&leb128(0)); // fd_write (import 0)
+        b.push(OP_I32_CONST);
+        b.push(1); // fd = stdout
+        b.push(OP_I32_CONST);
+        b.push(0); // iov_ptr
+        b.push(OP_I32_CONST);
+        b.push(1); // iov_count = 1
+        b.push(OP_I32_CONST);
+        b.extend_from_slice(&leb128_signed(60)); // nwritten_ptr
+        b.push(OP_CALL);
+        b.extend_from_slice(&leb128(0)); // fd_write (import 0)
         b.push(OP_DROP);
 
         // --- Second fd_write: write '\n' ---
         // Store '\n' at offset 56
-        b.push(OP_I32_CONST); b.push(56); // addr
-        b.push(OP_I32_CONST); b.push(10); // '\n'
-        b.push(0x3A); b.push(0x00); b.push(0x00); // i32.store8
+        b.push(OP_I32_CONST);
+        b.push(56); // addr
+        b.push(OP_I32_CONST);
+        b.push(10); // '\n'
+        b.push(0x3A);
+        b.push(0x00);
+        b.push(0x00); // i32.store8
 
         // Set up iov: ptr = 56, len = 1
-        b.push(OP_I32_CONST); b.push(0x00); // addr for iov.ptr
-        b.push(OP_I32_CONST); b.push(56);   // newline address
-        b.push(0x36); b.push(0x02); b.push(0x00); // i32.store align=2 offset=0
+        b.push(OP_I32_CONST);
+        b.push(0x00); // addr for iov.ptr
+        b.push(OP_I32_CONST);
+        b.push(56); // newline address
+        b.push(0x36);
+        b.push(0x02);
+        b.push(0x00); // i32.store align=2 offset=0
 
-        b.push(OP_I32_CONST); b.push(0x04); // addr for iov.len
-        b.push(OP_I32_CONST); b.push(1);    // length = 1
-        b.push(0x36); b.push(0x02); b.push(0x00); // i32.store align=2 offset=0
+        b.push(OP_I32_CONST);
+        b.push(0x04); // addr for iov.len
+        b.push(OP_I32_CONST);
+        b.push(1); // length = 1
+        b.push(0x36);
+        b.push(0x02);
+        b.push(0x00); // i32.store align=2 offset=0
 
         // fd_write(1, 0, 1, 60) — write newline
-        b.push(OP_I32_CONST); b.push(1); // fd = stdout
-        b.push(OP_I32_CONST); b.push(0); // iov_ptr
-        b.push(OP_I32_CONST); b.push(1); // iov_count = 1
-        b.push(OP_I32_CONST); b.extend_from_slice(&leb128_signed(60)); // nwritten_ptr
-        b.push(OP_CALL); b.extend_from_slice(&leb128(0)); // fd_write (import 0)
+        b.push(OP_I32_CONST);
+        b.push(1); // fd = stdout
+        b.push(OP_I32_CONST);
+        b.push(0); // iov_ptr
+        b.push(OP_I32_CONST);
+        b.push(1); // iov_count = 1
+        b.push(OP_I32_CONST);
+        b.extend_from_slice(&leb128_signed(60)); // nwritten_ptr
+        b.push(OP_CALL);
+        b.extend_from_slice(&leb128(0)); // fd_write (import 0)
         b.push(OP_DROP);
 
         b.push(OP_END); // end function
@@ -498,7 +624,11 @@ impl WasmGen {
     // Function compilation
     // -----------------------------------------------------------------------
 
-    fn compile_func(&mut self, f: &ast::FuncDef, _span: crate::token::Span) -> Result<WasmFunc, String> {
+    fn compile_func(
+        &mut self,
+        f: &ast::FuncDef,
+        _span: crate::token::Span,
+    ) -> Result<WasmFunc, String> {
         // Reset per-function state
         self.local_idx.clear();
         self.current_locals = 0;
@@ -519,8 +649,13 @@ impl WasmGen {
             } else {
                 ValKind::I32
             };
-            param_types.push(match kind { ValKind::I32 => I32, ValKind::I64 => I64, ValKind::F64 => F64 });
-            self.local_idx.insert(p.name.clone(), self.current_locals as u32);
+            param_types.push(match kind {
+                ValKind::I32 => I32,
+                ValKind::I64 => I64,
+                ValKind::F64 => F64,
+            });
+            self.local_idx
+                .insert(p.name.clone(), self.current_locals as u32);
             self.current_locals += 1;
         }
 
@@ -567,9 +702,11 @@ impl WasmGen {
         if ret_type.is_empty() {
             // void function — no value needed
         } else if ret_type[0] == I32 {
-            body.push(OP_I32_CONST); body.push(0x00);
+            body.push(OP_I32_CONST);
+            body.push(0x00);
         } else if ret_type[0] == F64 {
-            body.push(OP_F64_CONST); body.extend_from_slice(&0.0f64.to_le_bytes());
+            body.push(OP_F64_CONST);
+            body.extend_from_slice(&0.0f64.to_le_bytes());
         }
 
         body.push(OP_END);
@@ -584,12 +721,18 @@ impl WasmGen {
         })
     }
 
-    fn collect_locals(&mut self, stmts: &[ast::Stmt], names: &mut Vec<String>, kinds: &mut Vec<ValKind>) {
+    fn collect_locals(
+        &mut self,
+        stmts: &[ast::Stmt],
+        names: &mut Vec<String>,
+        kinds: &mut Vec<ValKind>,
+    ) {
         for s in stmts {
             match &s.node {
                 ast::StmtKind::Var { name, .. } => {
                     if !self.local_idx.contains_key(name) {
-                        self.local_idx.insert(name.clone(), self.current_locals as u32);
+                        self.local_idx
+                            .insert(name.clone(), self.current_locals as u32);
                         self.current_locals += 1;
                         names.push(name.clone());
                         kinds.push(ValKind::I32);
@@ -597,7 +740,8 @@ impl WasmGen {
                 }
                 ast::StmtKind::ForIn { name, body, .. } => {
                     if !self.local_idx.contains_key(name) {
-                        self.local_idx.insert(name.clone(), self.current_locals as u32);
+                        self.local_idx
+                            .insert(name.clone(), self.current_locals as u32);
                         self.current_locals += 1;
                         names.push(name.clone());
                         kinds.push(ValKind::I32);
@@ -606,13 +750,20 @@ impl WasmGen {
                 }
                 ast::StmtKind::If { then, els, .. } => {
                     self.collect_locals(std::slice::from_ref(then), names, kinds);
-                    if let Some(e) = els { self.collect_locals(std::slice::from_ref(e), names, kinds); }
+                    if let Some(e) = els {
+                        self.collect_locals(std::slice::from_ref(e), names, kinds);
+                    }
                 }
-                ast::StmtKind::While { body, .. } => { self.collect_locals(std::slice::from_ref(body), names, kinds); }
-                ast::StmtKind::Block(stmts2) => { self.collect_locals(stmts2, names, kinds); }
+                ast::StmtKind::While { body, .. } => {
+                    self.collect_locals(std::slice::from_ref(body), names, kinds);
+                }
+                ast::StmtKind::Block(stmts2) => {
+                    self.collect_locals(stmts2, names, kinds);
+                }
                 ast::StmtKind::Func(f) => {
                     if !self.local_idx.contains_key(&f.name) {
-                        self.local_idx.insert(f.name.clone(), self.current_locals as u32);
+                        self.local_idx
+                            .insert(f.name.clone(), self.current_locals as u32);
                         self.current_locals += 1;
                         names.push(f.name.clone());
                         kinds.push(ValKind::I32);
@@ -636,18 +787,22 @@ impl WasmGen {
             ast::StmtKind::Var { name, value, .. } => {
                 self.gen_expr(b, value);
                 if let Some(&idx) = self.local_idx.get(name) {
-                    b.push(OP_LOCAL_SET); b.extend_from_slice(&leb128(idx));
+                    b.push(OP_LOCAL_SET);
+                    b.extend_from_slice(&leb128(idx));
                 } else {
                     b.push(OP_DROP);
                 }
             }
             ast::StmtKind::Return(e) => {
-                if let Some(e) = e { self.gen_expr(b, e); }
+                if let Some(e) = e {
+                    self.gen_expr(b, e);
+                }
                 b.push(OP_RETURN);
             }
             ast::StmtKind::If { cond, then, els } => {
                 self.gen_expr(b, cond);
-                b.push(OP_IF); b.push(0x40); // void block type
+                b.push(OP_IF);
+                b.push(0x40); // void block type
                 self.gen_stmt(b, then);
                 if let Some(els) = els {
                     b.push(OP_ELSE);
@@ -658,37 +813,48 @@ impl WasmGen {
             ast::StmtKind::While { cond, body } => {
                 self.depth += 1;
                 let loop_label = self.depth;
-                b.push(OP_BLOCK); b.push(0x40); // break target
-                b.push(OP_LOOP); b.push(0x40);  // continue target
+                b.push(OP_BLOCK);
+                b.push(0x40); // break target
+                b.push(OP_LOOP);
+                b.push(0x40); // continue target
                 self.gen_expr(b, cond);
                 b.push(OP_I32_EQZ); // if !cond, break
-                b.push(OP_BR_IF); b.extend_from_slice(&leb128(loop_label));
+                b.push(OP_BR_IF);
+                b.extend_from_slice(&leb128(loop_label));
                 self.gen_stmt(b, body);
-                b.push(OP_BR); b.extend_from_slice(&leb128(0)); // continue
+                b.push(OP_BR);
+                b.extend_from_slice(&leb128(0)); // continue
                 b.push(OP_END); // end loop
                 b.push(OP_END); // end block
                 self.depth -= 1;
             }
-            ast::StmtKind::ForIn { name, iter, body, .. } => {
+            ast::StmtKind::ForIn {
+                name, iter, body, ..
+            } => {
                 self.depth += 1;
                 if let Some(&name_idx) = self.local_idx.get(name) {
                     self.gen_expr(b, iter);
-                    b.push(OP_LOCAL_SET); b.extend_from_slice(&leb128(name_idx));
+                    b.push(OP_LOCAL_SET);
+                    b.extend_from_slice(&leb128(name_idx));
                 }
                 self.gen_stmt(b, body);
                 self.depth -= 1;
             }
             ast::StmtKind::Block(stmts) => {
-                for s in stmts { self.gen_stmt(b, s); }
+                for s in stmts {
+                    self.gen_stmt(b, s);
+                }
             }
             ast::StmtKind::Break => {
                 if self.depth > 0 {
-                    b.push(OP_BR); b.extend_from_slice(&leb128(self.depth));
+                    b.push(OP_BR);
+                    b.extend_from_slice(&leb128(self.depth));
                 }
             }
             ast::StmtKind::Continue => {
                 if self.depth > 0 {
-                    b.push(OP_BR); b.extend_from_slice(&leb128(0));
+                    b.push(OP_BR);
+                    b.extend_from_slice(&leb128(0));
                 }
             }
             ast::StmtKind::Import { .. } => { /* imports are resolved at link time */ }
@@ -721,21 +887,27 @@ impl WasmGen {
                 b.push(if *v { 1 } else { 0 });
             }
             ast::ExprKind::Null => {
-                b.push(OP_I32_CONST); b.push(0x00);
+                b.push(OP_I32_CONST);
+                b.push(0x00);
             }
             ast::ExprKind::Str(s) => {
                 // Push (offset, length) as two i32 values on the stack
                 let offset = self.add_string_data(s);
-                b.push(OP_I32_CONST); b.extend_from_slice(&leb128(offset));
-                b.push(OP_I32_CONST); b.extend_from_slice(&leb128(s.len() as u32));
+                b.push(OP_I32_CONST);
+                b.extend_from_slice(&leb128(offset));
+                b.push(OP_I32_CONST);
+                b.extend_from_slice(&leb128(s.len() as u32));
             }
             ast::ExprKind::Ident(name) => {
                 if let Some(&idx) = self.local_idx.get(name) {
-                    b.push(OP_LOCAL_GET); b.extend_from_slice(&leb128(idx));
+                    b.push(OP_LOCAL_GET);
+                    b.extend_from_slice(&leb128(idx));
                 } else if let Some(&func_idx) = self.func_name_to_idx.get(name) {
-                    b.push(OP_I32_CONST); b.extend_from_slice(&leb128(func_idx));
+                    b.push(OP_I32_CONST);
+                    b.extend_from_slice(&leb128(func_idx));
                 } else {
-                    b.push(OP_I32_CONST); b.push(0x00);
+                    b.push(OP_I32_CONST);
+                    b.push(0x00);
                 }
             }
             ast::ExprKind::Binary(op, a, c) => {
@@ -743,57 +915,90 @@ impl WasmGen {
                 self.gen_expr(b, c);
 
                 match op {
-                    ast::BinOp::Add => { b.push(OP_I32_ADD); }
-                    ast::BinOp::Sub => { b.push(OP_I32_SUB); }
-                    ast::BinOp::Mul => { b.push(OP_I32_MUL); }
-                    ast::BinOp::Div => { b.push(OP_I32_DIV_S); }
-                    ast::BinOp::Mod => { b.push(OP_I32_REM_S); }
-                    ast::BinOp::Eq  => { b.push(OP_I32_EQ); }
-                    ast::BinOp::Ne  => { b.push(OP_I32_NE); }
-                    ast::BinOp::Lt  => { b.push(OP_I32_LT_S); }
-                    ast::BinOp::Gt  => { b.push(OP_I32_GT_S); }
-                    ast::BinOp::Le  => { b.push(OP_I32_LE_S); }
-                    ast::BinOp::Ge  => { b.push(OP_I32_GE_S); }
-                    ast::BinOp::BAnd => { b.push(OP_I32_AND); }
-                    ast::BinOp::BOr  => { b.push(OP_I32_OR); }
-                    ast::BinOp::BXor => { b.push(OP_I32_XOR); }
-                    _    => { b.push(OP_I32_ADD); } // fallback
-                }
-            }
-            ast::ExprKind::Logical(op, a, c) => {
-                match op {
-                    ast::LogicalOp::And => {
-                        self.gen_expr(b, a);
-                        b.push(OP_IF); b.push(I32);
-                        self.gen_expr(b, c);
-                        b.push(OP_ELSE);
-                        b.push(OP_I32_CONST); b.push(0x00);
-                        b.push(OP_END);
+                    ast::BinOp::Add => {
+                        b.push(OP_I32_ADD);
                     }
-                    ast::LogicalOp::Or => {
-                        self.gen_expr(b, a);
-                        b.push(OP_IF); b.push(I32);
-                        b.push(OP_I32_CONST); b.push(0x01);
-                        b.push(OP_ELSE);
-                        self.gen_expr(b, c);
-                        b.push(OP_END);
-                    }
-                }
-            }
-            ast::ExprKind::Unary(op, x) => {
-                match op {
-                    ast::UnOp::Neg => {
-                        b.push(OP_I32_CONST); b.push(0x00);
-                        self.gen_expr(b, x);
+                    ast::BinOp::Sub => {
                         b.push(OP_I32_SUB);
                     }
-                    ast::UnOp::Not => {
-                        self.gen_expr(b, x);
-                        b.push(OP_I32_EQZ);
+                    ast::BinOp::Mul => {
+                        b.push(OP_I32_MUL);
                     }
-                    _ => { self.gen_expr(b, x); }
+                    ast::BinOp::Div => {
+                        b.push(OP_I32_DIV_S);
+                    }
+                    ast::BinOp::Mod => {
+                        b.push(OP_I32_REM_S);
+                    }
+                    ast::BinOp::Eq => {
+                        b.push(OP_I32_EQ);
+                    }
+                    ast::BinOp::Ne => {
+                        b.push(OP_I32_NE);
+                    }
+                    ast::BinOp::Lt => {
+                        b.push(OP_I32_LT_S);
+                    }
+                    ast::BinOp::Gt => {
+                        b.push(OP_I32_GT_S);
+                    }
+                    ast::BinOp::Le => {
+                        b.push(OP_I32_LE_S);
+                    }
+                    ast::BinOp::Ge => {
+                        b.push(OP_I32_GE_S);
+                    }
+                    ast::BinOp::BAnd => {
+                        b.push(OP_I32_AND);
+                    }
+                    ast::BinOp::BOr => {
+                        b.push(OP_I32_OR);
+                    }
+                    ast::BinOp::BXor => {
+                        b.push(OP_I32_XOR);
+                    }
+                    _ => {
+                        b.push(OP_I32_ADD);
+                    } // fallback
                 }
             }
+            ast::ExprKind::Logical(op, a, c) => match op {
+                ast::LogicalOp::And => {
+                    self.gen_expr(b, a);
+                    b.push(OP_IF);
+                    b.push(I32);
+                    self.gen_expr(b, c);
+                    b.push(OP_ELSE);
+                    b.push(OP_I32_CONST);
+                    b.push(0x00);
+                    b.push(OP_END);
+                }
+                ast::LogicalOp::Or => {
+                    self.gen_expr(b, a);
+                    b.push(OP_IF);
+                    b.push(I32);
+                    b.push(OP_I32_CONST);
+                    b.push(0x01);
+                    b.push(OP_ELSE);
+                    self.gen_expr(b, c);
+                    b.push(OP_END);
+                }
+            },
+            ast::ExprKind::Unary(op, x) => match op {
+                ast::UnOp::Neg => {
+                    b.push(OP_I32_CONST);
+                    b.push(0x00);
+                    self.gen_expr(b, x);
+                    b.push(OP_I32_SUB);
+                }
+                ast::UnOp::Not => {
+                    self.gen_expr(b, x);
+                    b.push(OP_I32_EQZ);
+                }
+                _ => {
+                    self.gen_expr(b, x);
+                }
+            },
             ast::ExprKind::Call(callee, args) => {
                 // Built-in function handling
                 if let ast::ExprKind::Ident(name) = &callee.node {
@@ -803,10 +1008,14 @@ impl WasmGen {
                                 // Check if argument is a string literal → use say_str
                                 if let ast::ExprKind::Str(s) = &args[0].node {
                                     let offset = self.add_string_data(s);
-                                    b.push(OP_I32_CONST); b.extend_from_slice(&leb128(offset));
-                                    b.push(OP_I32_CONST); b.extend_from_slice(&leb128(s.len() as u32));
-                                    let say_str_idx = *self.func_name_to_idx.get("__plix_say_str").unwrap_or(&0);
-                                    b.push(OP_CALL); b.extend_from_slice(&leb128(say_str_idx));
+                                    b.push(OP_I32_CONST);
+                                    b.extend_from_slice(&leb128(offset));
+                                    b.push(OP_I32_CONST);
+                                    b.extend_from_slice(&leb128(s.len() as u32));
+                                    let say_str_idx =
+                                        *self.func_name_to_idx.get("__plix_say_str").unwrap_or(&0);
+                                    b.push(OP_CALL);
+                                    b.extend_from_slice(&leb128(say_str_idx));
                                 } else {
                                     // Integer/expression → use say_int
                                     self.gen_expr(b, &args[0]);
@@ -814,57 +1023,86 @@ impl WasmGen {
                                     // (which pushes offset+length), that's 2 values.
                                     // Only the top value would be consumed by say_int.
                                     // For non-string args this is fine.
-                                    let say_idx = *self.func_name_to_idx.get("__plix_say_int").unwrap_or(&0);
-                                    b.push(OP_CALL); b.extend_from_slice(&leb128(say_idx));
+                                    let say_idx =
+                                        *self.func_name_to_idx.get("__plix_say_int").unwrap_or(&0);
+                                    b.push(OP_CALL);
+                                    b.extend_from_slice(&leb128(say_idx));
                                 }
                             }
-                            b.push(OP_I32_CONST); b.push(0x00);
+                            b.push(OP_I32_CONST);
+                            b.push(0x00);
                             return;
                         }
                         "abs" => {
                             if !args.is_empty() {
                                 // abs(x) = x < 0 ? -x : x
                                 self.gen_expr(b, &args[0]);
-                                b.push(OP_LOCAL_TEE); b.extend_from_slice(&leb128(self.current_locals as u32));
+                                b.push(OP_LOCAL_TEE);
+                                b.extend_from_slice(&leb128(self.current_locals as u32));
                                 self.gen_expr(b, &args[0]);
-                                b.push(OP_I32_CONST); b.push(0x00);
+                                b.push(OP_I32_CONST);
+                                b.push(0x00);
                                 self.gen_expr(b, &args[0]);
                                 b.push(OP_I32_SUB);
                                 self.gen_expr(b, &args[0]);
-                                b.push(OP_I32_CONST); b.push(0x00);
+                                b.push(OP_I32_CONST);
+                                b.push(0x00);
                                 b.push(OP_I32_LT_S);
                                 b.push(OP_SELECT);
                             }
                             return;
                         }
                         "len" => {
-                            if !args.is_empty() { self.gen_expr(b, &args[0]); b.push(OP_DROP); }
-                            b.push(OP_I32_CONST); b.push(0x00);
+                            if !args.is_empty() {
+                                self.gen_expr(b, &args[0]);
+                                b.push(OP_DROP);
+                            }
+                            b.push(OP_I32_CONST);
+                            b.push(0x00);
                             return;
                         }
                         "int" | "float" | "str" => {
-                            if !args.is_empty() { self.gen_expr(b, &args[0]); }
-                            else { b.push(OP_I32_CONST); b.push(0x00); }
+                            if !args.is_empty() {
+                                self.gen_expr(b, &args[0]);
+                            } else {
+                                b.push(OP_I32_CONST);
+                                b.push(0x00);
+                            }
                             return;
                         }
                         "type_of" => {
-                            if !args.is_empty() { self.gen_expr(b, &args[0]); b.push(OP_DROP); }
-                            b.push(OP_I32_CONST); b.push(0x00);
+                            if !args.is_empty() {
+                                self.gen_expr(b, &args[0]);
+                                b.push(OP_DROP);
+                            }
+                            b.push(OP_I32_CONST);
+                            b.push(0x00);
                             return;
                         }
                         "assert" | "assert_eq" | "assert_ne" => {
-                            for a in args { self.gen_expr(b, a); b.push(OP_DROP); }
-                            b.push(OP_I32_CONST); b.push(0x00);
+                            for a in args {
+                                self.gen_expr(b, a);
+                                b.push(OP_DROP);
+                            }
+                            b.push(OP_I32_CONST);
+                            b.push(0x00);
                             return;
                         }
                         _ => {
                             // User function call
                             if let Some(&func_idx) = self.func_name_to_idx.get(name) {
-                                for a in args { self.gen_expr(b, a); }
-                                b.push(OP_CALL); b.extend_from_slice(&leb128(func_idx));
+                                for a in args {
+                                    self.gen_expr(b, a);
+                                }
+                                b.push(OP_CALL);
+                                b.extend_from_slice(&leb128(func_idx));
                             } else {
-                                for a in args { self.gen_expr(b, a); b.push(OP_DROP); }
-                                b.push(OP_I32_CONST); b.push(0x00);
+                                for a in args {
+                                    self.gen_expr(b, a);
+                                    b.push(OP_DROP);
+                                }
+                                b.push(OP_I32_CONST);
+                                b.push(0x00);
                             }
                             return;
                         }
@@ -872,35 +1110,44 @@ impl WasmGen {
                 }
 
                 // Indirect call
-                for a in args { self.gen_expr(b, a); }
+                for a in args {
+                    self.gen_expr(b, a);
+                }
                 self.gen_expr(b, callee);
                 b.push(OP_DROP);
-                b.push(OP_I32_CONST); b.push(0x00);
+                b.push(OP_I32_CONST);
+                b.push(0x00);
             }
             ast::ExprKind::Assign { target, value, .. } => {
                 self.gen_expr(b, value);
                 match target {
                     ast::AssignTarget::Ident(name) => {
                         if let Some(&idx) = self.local_idx.get(name) {
-                            b.push(OP_LOCAL_SET); b.extend_from_slice(&leb128(idx));
+                            b.push(OP_LOCAL_SET);
+                            b.extend_from_slice(&leb128(idx));
                         } else {
                             b.push(OP_DROP);
                         }
                     }
-                    _ => { b.push(OP_DROP); }
+                    _ => {
+                        b.push(OP_DROP);
+                    }
                 }
-                b.push(OP_I32_CONST); b.push(0x00);
+                b.push(OP_I32_CONST);
+                b.push(0x00);
             }
             ast::ExprKind::Ternary(cond, then, els) => {
                 self.gen_expr(b, cond);
-                b.push(OP_IF); b.push(I32);
+                b.push(OP_IF);
+                b.push(I32);
                 self.gen_expr(b, then);
                 b.push(OP_ELSE);
                 self.gen_expr(b, els);
                 b.push(OP_END);
             }
             _ => {
-                b.push(OP_I32_CONST); b.push(0x00);
+                b.push(OP_I32_CONST);
+                b.push(0x00);
             }
         }
     }
@@ -1026,9 +1273,13 @@ fn leb128(mut value: u32) -> Vec<u8> {
     loop {
         let mut byte = (value & 0x7F) as u8;
         value >>= 7;
-        if value != 0 { byte |= 0x80; }
+        if value != 0 {
+            byte |= 0x80;
+        }
         out.push(byte);
-        if value == 0 { break; }
+        if value == 0 {
+            break;
+        }
     }
     out
 }
@@ -1039,9 +1290,13 @@ fn leb128_signed(mut value: i64) -> Vec<u8> {
         let mut byte = (value & 0x7F) as u8;
         value >>= 7;
         let more = !((value == 0 && (byte & 0x40) == 0) || (value == -1 && (byte & 0x40) != 0));
-        if more { byte |= 0x80; }
+        if more {
+            byte |= 0x80;
+        }
         out.push(byte);
-        if !more { break; }
+        if !more {
+            break;
+        }
     }
     out
 }

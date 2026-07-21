@@ -11,7 +11,7 @@
 //!
 //! Usage: `plix lsp`
 
-use crate::{owncheck, fmt, ast};
+use crate::{ast, fmt, owncheck};
 use std::collections::HashMap;
 use std::io::{self, BufRead, Write};
 
@@ -27,7 +27,9 @@ fn read_message(stdin: &mut dyn BufRead) -> Option<String> {
             Ok(0) => return None,
             Ok(_) => {
                 let header = header.trim();
-                if header.is_empty() { break; }
+                if header.is_empty() {
+                    break;
+                }
                 if let Some(len_str) = header.strip_prefix("Content-Length:") {
                     content_length = len_str.trim().parse().unwrap_or(0);
                 }
@@ -35,14 +37,23 @@ fn read_message(stdin: &mut dyn BufRead) -> Option<String> {
             Err(_) => return None,
         }
     }
-    if content_length == 0 { return None; }
+    if content_length == 0 {
+        return None;
+    }
     let mut buf = vec![0u8; content_length];
-    if stdin.read_exact(&mut buf).is_err() { return None; }
+    if stdin.read_exact(&mut buf).is_err() {
+        return None;
+    }
     String::from_utf8(buf).ok()
 }
 
 fn write_message(stdout: &mut dyn Write, content: &str) {
-    let _ = write!(stdout, "Content-Length: {}\r\n\r\n{}", content.len(), content);
+    let _ = write!(
+        stdout,
+        "Content-Length: {}\r\n\r\n{}",
+        content.len(),
+        content
+    );
     let _ = stdout.flush();
 }
 
@@ -104,9 +115,13 @@ fn handle_message(msg: &str, docs: &mut Docs) -> Option<String> {
             if let (Some(uri), Some(text)) = (uri, text) {
                 docs.insert(uri.clone(), text);
                 let diags = compute_diagnostics(&docs[&uri]);
-                Some(json_notification("textDocument/publishDiagnostics",
-                    &json_publish_diagnostics(&uri, &diags)))
-            } else { None }
+                Some(json_notification(
+                    "textDocument/publishDiagnostics",
+                    &json_publish_diagnostics(&uri, &diags),
+                ))
+            } else {
+                None
+            }
         }
         Some("textDocument/didChange") => {
             let uri = extract_json_string_field(msg, "uri");
@@ -114,12 +129,18 @@ fn handle_message(msg: &str, docs: &mut Docs) -> Option<String> {
             if let (Some(uri), Some(text)) = (uri, text) {
                 docs.insert(uri.clone(), text);
                 let diags = compute_diagnostics(&docs[&uri]);
-                Some(json_notification("textDocument/publishDiagnostics",
-                    &json_publish_diagnostics(&uri, &diags)))
-            } else { None }
+                Some(json_notification(
+                    "textDocument/publishDiagnostics",
+                    &json_publish_diagnostics(&uri, &diags),
+                ))
+            } else {
+                None
+            }
         }
         Some("textDocument/didClose") => {
-            if let Some(uri) = extract_json_string_field(msg, "uri") { docs.remove(&uri); }
+            if let Some(uri) = extract_json_string_field(msg, "uri") {
+                docs.remove(&uri);
+            }
             None
         }
         Some("textDocument/completion") => Some(json_response(id, COMPLETION_RESULT)),
@@ -149,7 +170,11 @@ fn handle_message(msg: &str, docs: &mut Docs) -> Option<String> {
 // ---------------------------------------------------------------------------
 
 struct Diagnostic {
-    line: u32, col: u32, severity: u32, code: String, message: String,
+    line: u32,
+    col: u32,
+    severity: u32,
+    code: String,
+    message: String,
 }
 
 fn compute_diagnostics(source: &str) -> Vec<Diagnostic> {
@@ -159,8 +184,13 @@ fn compute_diagnostics(source: &str) -> Vec<Diagnostic> {
     let _tokens = match crate::lexer::lex(source) {
         Ok(t) => t,
         Err(e) => {
-            diags.push(Diagnostic { line: e.line, col: e.col, severity: 1,
-                code: "E0001".into(), message: e.msg });
+            diags.push(Diagnostic {
+                line: e.line,
+                col: e.col,
+                severity: 1,
+                code: "E0001".into(),
+                message: e.msg,
+            });
             return diags;
         }
     };
@@ -169,8 +199,13 @@ fn compute_diagnostics(source: &str) -> Vec<Diagnostic> {
     let stmts = match crate::parser::parse_file(source) {
         Ok(s) => s,
         Err(e) => {
-            diags.push(Diagnostic { line: e.span.line, col: e.span.col, severity: 1,
-                code: "E0001".into(), message: e.msg });
+            diags.push(Diagnostic {
+                line: e.span.line,
+                col: e.span.col,
+                severity: 1,
+                code: "E0001".into(),
+                message: e.msg,
+            });
             return diags;
         }
     };
@@ -180,8 +215,13 @@ fn compute_diagnostics(source: &str) -> Vec<Diagnostic> {
         Ok(_) => {}
         Err(errors) => {
             for e in &errors {
-                diags.push(Diagnostic { line: e.span.line, col: e.span.col,
-                    severity: 1, code: e.code.to_string(), message: e.msg.clone() });
+                diags.push(Diagnostic {
+                    line: e.span.line,
+                    col: e.span.col,
+                    severity: 1,
+                    code: e.code.to_string(),
+                    message: e.msg.clone(),
+                });
             }
         }
     }
@@ -191,8 +231,13 @@ fn compute_diagnostics(source: &str) -> Vec<Diagnostic> {
         Ok(()) => {}
         Err(errors) => {
             for e in &errors {
-                diags.push(Diagnostic { line: e.span.line, col: e.span.col,
-                    severity: 1, code: e.code.to_string(), message: e.msg.clone() });
+                diags.push(Diagnostic {
+                    line: e.span.line,
+                    col: e.span.col,
+                    severity: 1,
+                    code: e.code.to_string(),
+                    message: e.msg.clone(),
+                });
             }
         }
     }
@@ -200,8 +245,13 @@ fn compute_diagnostics(source: &str) -> Vec<Diagnostic> {
     // 5. Lint
     if let Ok(warnings) = crate::lint::lint_source(source, "<document>") {
         for w in &warnings {
-            diags.push(Diagnostic { line: w.line, col: w.col, severity: 2,
-                code: w.code.to_string(), message: w.msg.clone() });
+            diags.push(Diagnostic {
+                line: w.line,
+                col: w.col,
+                severity: 2,
+                code: w.code.to_string(),
+                message: w.msg.clone(),
+            });
         }
     }
 
@@ -218,18 +268,28 @@ const COMPLETION_RESULT: &str = r#"{"isIncomplete":false,"items":[{"label":"func
 
 fn json_response(id: Option<i64>, result: &str) -> String {
     match id {
-        Some(id) => format!("{{\"jsonrpc\":\"2.0\",\"id\":{},\"result\":{}}}", id, result),
+        Some(id) => format!(
+            "{{\"jsonrpc\":\"2.0\",\"id\":{},\"result\":{}}}",
+            id, result
+        ),
         None => format!("{{\"jsonrpc\":\"2.0\",\"result\":{}}}", result),
     }
 }
 
 fn json_notification(method: &str, params: &str) -> String {
-    format!("{{\"jsonrpc\":\"2.0\",\"method\":\"{}\",\"params\":{}}}", method, params)
+    format!(
+        "{{\"jsonrpc\":\"2.0\",\"method\":\"{}\",\"params\":{}}}",
+        method, params
+    )
 }
 
 fn json_error_response(id: i64, code: i32, message: &str) -> String {
-    format!("{{\"jsonrpc\":\"2.0\",\"id\":{},\"error\":{{\"code\":{},\"message\":{}}}}}",
-        id, code, json_str(message))
+    format!(
+        "{{\"jsonrpc\":\"2.0\",\"id\":{},\"error\":{{\"code\":{},\"message\":{}}}}}",
+        id,
+        code,
+        json_str(message)
+    )
 }
 
 fn json_publish_diagnostics(uri: &str, diags: &[Diagnostic]) -> String {
@@ -239,7 +299,11 @@ fn json_publish_diagnostics(uri: &str, diags: &[Diagnostic]) -> String {
         d.line.saturating_sub(1), d.col + 10,
         d.severity, json_str(&d.code), json_str(&d.message)
     )).collect();
-    format!("{{\"uri\":{},\"diagnostics\":[{}]}}", json_str(uri), items.join(","))
+    format!(
+        "{{\"uri\":{},\"diagnostics\":[{}]}}",
+        json_str(uri),
+        items.join(",")
+    )
 }
 
 fn json_hover_result(uri: Option<&str>, docs: &Docs) -> String {
@@ -248,10 +312,15 @@ fn json_hover_result(uri: Option<&str>, docs: &Docs) -> String {
             if let Ok(stmts) = crate::parser::parse_file(source) {
                 let type_ok = crate::typecheck::check_program(&stmts).is_ok();
                 let own_ok = owncheck::check_program(&stmts).is_ok();
-                let info = format!("Plix program\nTypes: {}\nOwnership: {}",
+                let info = format!(
+                    "Plix program\nTypes: {}\nOwnership: {}",
                     if type_ok { "✓" } else { "✗" },
-                    if own_ok { "✓" } else { "✗" });
-                return format!("{{\"contents\":{{\"kind\":\"plaintext\",\"value\":{}}}}}", json_str(&info));
+                    if own_ok { "✓" } else { "✗" }
+                );
+                return format!(
+                    "{{\"contents\":{{\"kind\":\"plaintext\",\"value\":{}}}}}",
+                    json_str(&info)
+                );
             }
         }
     }
@@ -265,7 +334,8 @@ fn json_formatting_result(uri: Option<&str>, docs: &Docs) -> String {
                 Ok(result) if result.changed => {
                     return format!(
                         "[{{\"range\":{{\"start\":{{\"line\":0,\"character\":0}},\"end\":{{\"line\":999999,\"character\":0}}}},\"newText\":{}}}]",
-                        json_str(&result.formatted));
+                        json_str(&result.formatted)
+                    );
                 }
                 _ => return "[]".to_string(),
             }

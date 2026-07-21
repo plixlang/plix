@@ -188,11 +188,7 @@ pub fn format_source(src: &str) -> Result<FormatResult, String> {
 
 /// Merge formatted code lines back into the original structure,
 /// preserving comments and blank lines at their original positions.
-fn merge_preserving_non_code(
-    src: &str,
-    kinds: &[LineKind],
-    formatted: &[&str],
-) -> String {
+fn merge_preserving_non_code(src: &str, kinds: &[LineKind], formatted: &[&str]) -> String {
     let src_lines: Vec<&str> = src.lines().collect();
     let mut out = String::new();
     let mut fi = 0; // formatted-code index
@@ -513,29 +509,44 @@ mod tests {
     #[test]
     fn for_in_needs_space_before_in() {
         let result = fmt("for (x in [1,2,3]) { say(x); }");
-        assert!(result.contains("x in"), "expected `x in` but got:\n{result}");
+        assert!(
+            result.contains("x in"),
+            "expected `x in` but got:\n{result}"
+        );
         assert!(!result.contains("xin"), "must not contain `xin`:\n{result}");
     }
 
     #[test]
     fn else_after_rbrace_on_same_line() {
         let result = fmt("if (a) { say(1); } else { say(2); }");
-        assert!(result.contains("else"), "expected `else` but got:\n{result}");
+        assert!(
+            result.contains("else"),
+            "expected `else` but got:\n{result}"
+        );
         let lines: Vec<&str> = result.lines().collect();
         let else_line = lines.iter().find(|l| l.contains("else"));
-        assert!(else_line.is_some(), "expected `else` on some line, got:\n{result}");
+        assert!(
+            else_line.is_some(),
+            "expected `else` on some line, got:\n{result}"
+        );
     }
 
     #[test]
     fn impl_for_needs_space_before_for() {
         let result = fmt("impl Shape for Point { }");
-        assert!(result.contains("for Point"), "expected `for Point` but got:\n{result}");
+        assert!(
+            result.contains("for Point"),
+            "expected `for Point` but got:\n{result}"
+        );
     }
 
     #[test]
     fn import_as_needs_space_before_as() {
         let result = fmt("import \"sys\" as s;");
-        assert!(result.contains("as s"), "expected `as s` but got:\n{result}");
+        assert!(
+            result.contains("as s"),
+            "expected `as s` but got:\n{result}"
+        );
     }
 
     #[test]
@@ -565,8 +576,14 @@ mod tests {
     fn preserves_line_comments() {
         let src = "// hello\nauto x = 1;\n// world\nsay(x);\n";
         let result = fmt(src);
-        assert!(result.contains("// hello"), "lost // hello comment:\n{result}");
-        assert!(result.contains("// world"), "lost // world comment:\n{result}");
+        assert!(
+            result.contains("// hello"),
+            "lost // hello comment:\n{result}"
+        );
+        assert!(
+            result.contains("// world"),
+            "lost // world comment:\n{result}"
+        );
     }
 
     #[test]
@@ -575,13 +592,19 @@ mod tests {
         let result = fmt(src);
         // Should have a blank line between the two statements.
         let lines: Vec<&str> = result.lines().collect();
-        assert!(lines.iter().any(|l| l.trim().is_empty()), "lost blank line:\n{result}");
+        assert!(
+            lines.iter().any(|l| l.trim().is_empty()),
+            "lost blank line:\n{result}"
+        );
     }
 
     #[test]
     fn preserves_block_comments() {
         let src = "/* comment */ auto x = 1;\nsay(x);\n";
         let result = fmt(src);
-        assert!(result.contains("/* comment */"), "lost block comment:\n{result}");
+        assert!(
+            result.contains("/* comment */"),
+            "lost block comment:\n{result}"
+        );
     }
 }

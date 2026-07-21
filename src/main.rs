@@ -14,9 +14,9 @@ mod owncheck;
 mod codegen;
 mod fmt;
 mod interp;
-mod lsp;
 mod lexer;
 mod lint;
+mod lsp;
 mod manifest;
 mod parser;
 mod resolve;
@@ -407,20 +407,22 @@ fn cmd_build(args: &[String]) -> ExitCode {
 
     if target == "wasm" {
         // WASM output
-        let wasm_out = if out.ends_with(".wasm") { out } else { out + ".wasm" };
+        let wasm_out = if out.ends_with(".wasm") {
+            out
+        } else {
+            out + ".wasm"
+        };
         match wasm::compile_source(&src, &name) {
-            Ok(bytes) => {
-                match std::fs::write(&wasm_out, &bytes) {
-                    Ok(()) => {
-                        println!("✓ built wasm module: {} ({} bytes)", wasm_out, bytes.len());
-                        ExitCode::SUCCESS
-                    }
-                    Err(e) => {
-                        eprintln!("cannot write {}: {}", wasm_out, e);
-                        ExitCode::FAILURE
-                    }
+            Ok(bytes) => match std::fs::write(&wasm_out, &bytes) {
+                Ok(()) => {
+                    println!("✓ built wasm module: {} ({} bytes)", wasm_out, bytes.len());
+                    ExitCode::SUCCESS
                 }
-            }
+                Err(e) => {
+                    eprintln!("cannot write {}: {}", wasm_out, e);
+                    ExitCode::FAILURE
+                }
+            },
             Err(e) => {
                 eprintln!("{}", e);
                 ExitCode::FAILURE

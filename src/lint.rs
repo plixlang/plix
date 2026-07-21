@@ -262,8 +262,12 @@ mod tests {
     fn lint_unused_variable() {
         let src = "auto x = 1;";
         let warnings = lint_source(src, "test.px").unwrap();
-        assert!(warnings.iter().any(|w| w.code == "W0001" && w.msg.contains("unused")),
-            "expected unused variable warning, got: {warnings:?}");
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.code == "W0001" && w.msg.contains("unused")),
+            "expected unused variable warning, got: {warnings:?}"
+        );
     }
 
     #[test]
@@ -271,15 +275,20 @@ mod tests {
         let src = "auto x = 1; say(x);";
         let warnings = lint_source(src, "test.px").unwrap();
         let unused: Vec<_> = warnings.iter().filter(|w| w.code == "W0001").collect();
-        assert!(unused.is_empty(), "expected no unused-variable warnings, got: {unused:?}");
+        assert!(
+            unused.is_empty(),
+            "expected no unused-variable warnings, got: {unused:?}"
+        );
     }
 
     #[test]
     fn lint_unreachable_code() {
         let src = "func f() { return 1; say(2); }";
         let warnings = lint_source(src, "test.px").unwrap();
-        assert!(warnings.iter().any(|w| w.code == "W0003"),
-            "expected unreachable warning, got: {warnings:?}");
+        assert!(
+            warnings.iter().any(|w| w.code == "W0003"),
+            "expected unreachable warning, got: {warnings:?}"
+        );
     }
 
     #[test]
