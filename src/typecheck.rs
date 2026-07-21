@@ -235,7 +235,7 @@ impl Ck {
                 no_args(self, "bool");
                 Ty::Bool
             }
-            "func" | "func<T>" => {
+            "func" | "func<T,U>" => {
                 if te.args.is_empty() {
                     Ty::Func(Rc::new(FnSig::default()))
                 } else {
