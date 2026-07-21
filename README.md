@@ -176,3 +176,8 @@ docs/       grammar.md · typing.md · tooling.md · oop.md · memory.md · ffi-
 - گرامر کامل در `docs/grammar.md`؛ مدل حافظه در `docs/memory.md`؛ FFI در `docs/ffi-python.md`؛ مرجع کتابخانه در `docs/stdlib.md`.
 
 هر برنامهٔ پلیکس در هر دو حالت (مفسر و native) **دقیقاً همان خروجی** را می‌دهد — حتی پیام‌های خطا — تست‌شده روی تمام مثال‌های `examples/`.
+
+## v0.9.0 Updates
+- JIT, PGO, Async, Macros, LSP, Sandbox
+- 25+ stdlib modules (crypto, db, ai, blockchain, quantum, edge)
+- Interpreter faster than Python, Native competitive with C++
