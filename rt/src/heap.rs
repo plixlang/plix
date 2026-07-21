@@ -1279,7 +1279,7 @@ pub fn sys_dlsym(handle: *mut c_void, name: &str) -> *mut c_void {
     }
     #[cfg(windows)]
     {
-        unsafe { win_GetProcAddress(handle, c_name.as_ptr()) }
+        unsafe { win_GetProcAddress(handle, c_name.as_ptr() as *const u8) }
     }
     #[cfg(not(any(unix, windows)))]
     {
@@ -1340,8 +1340,6 @@ mod win_raw {
         pub fn FreeLibrary(hModule: *mut c_void) -> i32;
     }
 }
-#[cfg(windows)]
-use win_raw::*;
 #[cfg(windows)]
 fn win_LoadLibraryW(name: *const u16) -> *mut c_void {
     unsafe { win_raw::LoadLibraryW(name) }
