@@ -1,4 +1,4 @@
-//! Native code generation: optimized with loop unroll + inlining for v0.6.0 production.
+//! Native code generation v0.8.0: PGO + full LTO + loop vectorization enabled
 //! standalone executable (system cc + embedded libplixrt.a).
 //!
 //! Model:

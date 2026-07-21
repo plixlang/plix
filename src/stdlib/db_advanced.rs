@@ -1,0 +1,1 @@
+pub fn query_advanced(sql: &str, params: &str) -> String { format!("advanced_query:{}|{}", sql, params) }\npub fn transaction(start: bool) -> String { if start { "TX_BEGIN".into() } else { "TX_COMMIT".into() } }
