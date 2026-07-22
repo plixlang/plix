@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="console-application">
+  <id>io.github.plixlang.plix</id>
+  <name>Plix</name>
+  <summary>A fast, safe and gradually typed programming language</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <description>
+    <p>
+      Plix is a fast, safe and gradually typed programming language with an
+      interpreter and a native Cranelift compiler.
+    </p>
+  </description>
+  <icon type="stock">plix</icon>
+  <url type="homepage">https://github.com/plixlang/plix</url>
+  <url type="bugtracker">https://github.com/plixlang/plix/issues</url>
+  <provides>
+    <binary>plix</binary>
+  </provides>
+  <categories>
+    <category>Development</category>
+  </categories>
+</component>
