@@ -120,6 +120,80 @@ jobs:
           echo "artifact_name=${PKG}" >> "$GITHUB_OUTPUT"
           echo "archive_path=dist/${PKG}.tar.gz" >> "$GITHUB_OUTPUT"
 
+      # Plix's native compiler depends on Cranelift, which currently has no
+      # i686 host backend. Do not label the x86_64 binary as an i386 package;
+      # add i386 only after an interpreter-only build feature exists.
+      - name: Build Debian amd64 package
+        if: runner.os == 'Linux'
+        id: package_debian
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          VERSION=$(awk -F '"' '/^version =/ { print $2; exit }' Cargo.toml)
+          # Debian sorts pre-release versions correctly when '-' becomes '~'.
+          DEB_VERSION="${VERSION//-/~}"
+          DEB_ARCH="amd64"
+          PACKAGE_ROOT="dist/debian/plix_${DEB_VERSION}_${DEB_ARCH}"
+
+          mkdir -p "${PACKAGE_ROOT}/DEBIAN"
+          mkdir -p "${PACKAGE_ROOT}/usr/bin"
+          mkdir -p "${PACKAGE_ROOT}/usr/share/doc/plix"
+          mkdir -p "${PACKAGE_ROOT}/usr/share/metainfo"
+
+          install -Dm755 \
+            "${{ matrix.binary }}" \
+            "${PACKAGE_ROOT}/usr/bin/plix"
+
+          install -Dm644 README.md \
+            "${PACKAGE_ROOT}/usr/share/doc/plix/README.md"
+          install -Dm644 LICENSE \
+            "${PACKAGE_ROOT}/usr/share/doc/plix/copyright"
+
+          for SIZE in 48 64 128 256 512; do
+            install -Dm644 \
+              "assets/linux/icons/plix-${SIZE}.png" \
+              "${PACKAGE_ROOT}/usr/share/icons/hicolor/${SIZE}x${SIZE}/apps/plix.png"
+          done
+
+          install -Dm644 \
+            assets/linux/io.github.plixlang.plix.metainfo.xml \
+            "${PACKAGE_ROOT}/usr/share/metainfo/io.github.plixlang.plix.metainfo.xml"
+
+          INSTALLED_SIZE=$(du -sk "${PACKAGE_ROOT}" | cut -f1)
+
+          cat > "${PACKAGE_ROOT}/DEBIAN/control" <<EOF
+          Package: plix
+          Version: ${DEB_VERSION}
+          Section: devel
+          Priority: optional
+          Architecture: ${DEB_ARCH}
+          Installed-Size: ${INSTALLED_SIZE}
+          Maintainer: Plix Team <plixlang@users.noreply.github.com>
+          Depends: libc6 (>= 2.35), libgcc-s1, gcc
+          Homepage: https://github.com/plixlang/plix
+          Description: Plix programming language
+           A fast, safe and gradually typed programming language with an
+           interpreter and a native Cranelift compiler.
+          EOF
+
+          DEB_PATH="dist/plix_${DEB_VERSION}_${DEB_ARCH}.deb"
+          dpkg-deb --build --root-owner-group "${PACKAGE_ROOT}" "${DEB_PATH}"
+          dpkg-deb --info "${DEB_PATH}"
+          dpkg-deb --contents "${DEB_PATH}"
+
+          echo "artifact_name=plix-${VERSION}-${DEB_ARCH}-deb" >> "$GITHUB_OUTPUT"
+          echo "package_path=${DEB_PATH}" >> "$GITHUB_OUTPUT"
+
+      - name: Test Debian amd64 package
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo dpkg -i "${{ steps.package_debian.outputs.package_path }}"
+          /usr/bin/plix --version
+          dpkg-query --show --showformat='${Package} ${Version} ${Architecture}\n' plix
+
       - name: Package Windows artifact
         if: runner.os == 'Windows'
         id: package_windows
@@ -147,6 +221,14 @@ jobs:
           path: ${{ steps.package_unix.outputs.archive_path || steps.package_windows.outputs.archive_path }}
           if-no-files-found: error
 
+      - name: Upload Debian amd64 artifact
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package_debian.outputs.artifact_name }}
+          path: ${{ steps.package_debian.outputs.package_path }}
+          if-no-files-found: error
+
   release:
     name: Publish GitHub Release
     needs: package
@@ -170,3 +252,4 @@ jobs:
           files: release-assets/*
           generate_release_notes: true
           prerelease: ${{ contains(github.ref_name, '-') }}
+
