@@ -1,5 +1,5 @@
-use std::path::{Path, PathBuf};
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Default)]
 pub struct Manifest {
@@ -93,7 +93,10 @@ fn parse_dep_map(val: &str, line: usize) -> Result<Dependency, String> {
         }
     }
     if let Some(url) = map.remove("git") {
-        Ok(Dependency::Git { url, tag: map.remove("tag") })
+        Ok(Dependency::Git {
+            url,
+            tag: map.remove("tag"),
+        })
     } else if let Some(path) = map.remove("path") {
         Ok(Dependency::Path(path))
     } else {

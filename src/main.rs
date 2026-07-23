@@ -83,7 +83,10 @@ fn cmd_install(args: &[String]) -> ExitCode {
 }
 
 fn cmd_init(args: &[String]) -> ExitCode {
-    let name = args.first().cloned().unwrap_or_else(|| "my_plix_project".to_string());
+    let name = args
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "my_plix_project".to_string());
     match pm::init_project(&name) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
