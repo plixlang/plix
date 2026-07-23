@@ -257,7 +257,7 @@ are green:
 | Milestone | Focus | Exit condition |
 |---|---|---|
 | v0.9.5 | Release hardening baseline | Versioning/doc cleanup, CI baseline, test inventory, initial Rust unit tests, changelog and v1 design documents |
-| v0.9.6–v0.9.x | Core stabilization | Compatibility corpus, runtime safety work, benchmark infrastructure, security threat model |
+| v0.9.9–v0.9.x | Core stabilization | Compatibility corpus, runtime safety work, benchmark infrastructure, security threat model |
 | v0.10.x | Ecosystem preview | Package manager/manifest/lockfile and registry preview; early editor/LSP packages |
 | v1.0.0-beta | Feature complete | Public beta, migration guide, packaging and platform test matrix complete |
 | v1.0.0-rc | API freeze | Only release-blocking security/correctness/performance fixes allowed |

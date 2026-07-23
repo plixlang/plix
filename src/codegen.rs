@@ -71,7 +71,26 @@ type CResult<T> = Result<T, String>;
 // ---------------------------------------------------------------------------
 
 pub fn compile_to_executable(src: &str, name: &str, out: &str) -> Result<(), String> {
-    let obj = build_object(src, name)?;
+    // Speed optimization: cache compiled objects by source hash
+    let cache_dir = std::env::var("HOME")
+        .map(|h| PathBuf::from(h).join(".plix").join("cache"))
+        .unwrap_or_else(|_| PathBuf::from(".plix_cache"));
+    std::fs::create_dir_all(&cache_dir).ok();
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    std::hash::Hash::hash(src, &mut hasher);
+    let hash = std::hash::Hasher::finish(&hasher);
+    let cache_file = cache_dir.join(format!("{:x}.o", hash));
+
+    let obj = if cache_file.exists() {
+        println!("  (using cached object)");
+        std::fs::read(&cache_file).map_err(|e| e.to_string())?
+    } else {
+        let obj = build_object(src, name)?;
+        std::fs::write(&cache_file, &obj).ok();
+        obj
+    };
+
     link_executable(&obj, out)
 }
 

@@ -1,0 +1,3 @@
+func id(x) { return x; }
+auto n: int = id("hi");
+say(n);

@@ -1,0 +1,6 @@
+func test_move() {
+    own a = [1, 2, 3];
+    own b = a;
+    say(a); // Should be a compile error
+}
+test_move();

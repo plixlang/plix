@@ -1,0 +1,13 @@
+import "py" as python;
+import py "numpy" as np;
+
+if (python.available()) {
+    say("Python is available");
+    auto a = np.array([1, 2, 3]);
+    say("Array: ${a}");
+    say("Sum: ${a.sum()}");
+    assert_eq(a.sum(), 6);
+    say("Python FFI OK");
+} else {
+    say("Python NOT available");
+}

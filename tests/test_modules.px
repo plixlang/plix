@@ -1,0 +1,5 @@
+import "security";
+// import "docker";
+
+say("Security hash: ${security.hash_str("plix")}");
+// say("Docker version: ${docker.version()}");

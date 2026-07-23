@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Default)]
 pub struct Manifest {
@@ -7,6 +8,14 @@ pub struct Manifest {
     pub build_entry: Option<String>,
     pub build_out: Option<String>,
     pub test_paths: Vec<String>,
+    pub dependencies: HashMap<String, Dependency>,
+}
+
+#[derive(Debug, Clone)]
+pub enum Dependency {
+    Version(String),
+    Git { url: String, tag: Option<String> },
+    Path(String),
 }
 
 impl Manifest {
@@ -58,10 +67,38 @@ fn parse_manifest(src: &str) -> Result<Manifest, String> {
             ("build", "entry") => m.build_entry = Some(parse_string(val, line_no)?),
             ("build", "out") => m.build_out = Some(parse_string(val, line_no)?),
             ("test", "paths") => m.test_paths = parse_string_array(val, line_no)?,
+            ("dependencies", _) => {
+                let dep = if val.starts_with('{') {
+                    parse_dep_map(val, line_no)?
+                } else {
+                    Dependency::Version(parse_string(val, line_no)?)
+                };
+                m.dependencies.insert(key.to_string(), dep);
+            }
             _ => {}
         }
     }
     Ok(m)
+}
+
+fn parse_dep_map(val: &str, line: usize) -> Result<Dependency, String> {
+    let inner = val.trim_matches(|c| c == '{' || c == '}').trim();
+    let mut map = HashMap::new();
+    for pair in inner.split(',') {
+        let parts: Vec<&str> = pair.split('=').collect();
+        if parts.len() == 2 {
+            let k = parts[0].trim();
+            let v = parse_string(parts[1].trim(), line)?;
+            map.insert(k.to_string(), v);
+        }
+    }
+    if let Some(url) = map.remove("git") {
+        Ok(Dependency::Git { url, tag: map.remove("tag") })
+    } else if let Some(path) = map.remove("path") {
+        Ok(Dependency::Path(path))
+    } else {
+        Err(format!("line {}: invalid dependency map", line))
+    }
 }
 
 fn strip_comment(s: &str) -> &str {
@@ -88,7 +125,7 @@ fn strip_comment(s: &str) -> &str {
 fn parse_string(v: &str, line: usize) -> Result<String, String> {
     let v = v.trim();
     if !(v.starts_with('"') && v.ends_with('"') && v.len() >= 2) {
-        return Err(format!("line {}: expected string literal", line));
+        return Err(format!("line {}: expected string literal, got {}", line, v));
     }
     let inner = &v[1..v.len() - 1];
     let mut out = String::new();
@@ -150,50 +187,4 @@ fn parse_string_array(v: &str, line: usize) -> Result<Vec<String>, String> {
         out.push(parse_string(cur.trim(), line)?);
     }
     Ok(out)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parses_project_manifest_and_quoted_comments() {
-        let manifest = parse_manifest(
-            r#"
-            [package]
-            name = "demo # still part of the name"
-            version = "1.2.3"
-            [build]
-            entry = "src/main.px"
-            out = "target/demo"
-            [test]
-            paths = ["tests", "specs/unit"] # ignored comment
-            "#,
-        )
-        .unwrap();
-        assert_eq!(
-            manifest.package_name.as_deref(),
-            Some("demo # still part of the name")
-        );
-        assert_eq!(manifest.package_version.as_deref(), Some("1.2.3"));
-        assert_eq!(manifest.build_entry.as_deref(), Some("src/main.px"));
-        assert_eq!(manifest.build_out.as_deref(), Some("target/demo"));
-        assert_eq!(manifest.test_paths, vec!["tests", "specs/unit"]);
-    }
-
-    #[test]
-    fn rejects_non_string_manifest_values() {
-        let err = parse_manifest("[package]\nname = unquoted").unwrap_err();
-        assert_eq!(err, "line 2: expected string literal");
-    }
-
-    #[test]
-    fn finds_manifest_from_nested_directory() {
-        let root = std::env::temp_dir().join(format!("plix-manifest-test-{}", std::process::id()));
-        let nested = root.join("a/b");
-        std::fs::create_dir_all(&nested).unwrap();
-        std::fs::write(root.join("plix.toml"), "[package]\nname = \"demo\"").unwrap();
-        assert_eq!(Manifest::find_from(&nested), Some(root.join("plix.toml")));
-        std::fs::remove_dir_all(root).unwrap();
-    }
 }

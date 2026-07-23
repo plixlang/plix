@@ -1,0 +1,47 @@
+// Plix Strict Testing
+
+func test_typed_overflow() {
+    say("Testing typed overflow...");
+    auto x: int = 4611686018427387903; // max 62-bit int
+    try {
+        x += 1;
+        say("Error: Should have overflowed, but got ${x}");
+    } catch (e) {
+        say("Caught expected overflow: ${e}");
+    }
+}
+
+func test_ownership() {
+    say("Testing ownership...");
+    own a = [1, 2, 3];
+    own b = a; // move
+    // say(a); // This should be a compile-time error if we use 'plix check'
+    say("Successfully moved a to b");
+}
+
+struct Point { x: float, y: float }
+impl Point {
+    func norm(self) -> float {
+        return (self.x * self.x + self.y * self.y) ** 0.5;
+    }
+}
+
+func test_structs() {
+    say("Testing structs...");
+    auto p = Point { x: 3.0, y: 4.0 };
+    say("Point norm: ${p.norm()}");
+}
+
+func test_gradual_typing() {
+    say("Testing gradual typing...");
+    func add(a: int, b: int) -> int {
+        return a + b;
+    }
+    say("add(1, 2) = ${add(1, 2)}");
+    // add(1, "2"); // Should be a compile error or guard error
+}
+
+test_typed_overflow();
+test_ownership();
+test_structs();
+test_gradual_typing();

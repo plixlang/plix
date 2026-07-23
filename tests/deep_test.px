@@ -1,0 +1,84 @@
+import "fs";
+import "sys";
+
+func test_math() {
+    say("--- Math ---");
+    assert_eq(2 + 2 * 2, 6);
+    assert_eq(10 / 4, 2.5);
+    assert_eq(idiv(10, 4), 2);
+    assert_eq(pow(2, 3), 8.0);
+    say("Math OK");
+}
+
+func test_strings() {
+    say("--- Strings ---");
+    auto s = "hello";
+    assert_eq(len(s), 5);
+    assert_eq(s[0..2], "he");
+    assert_eq(s[-1], "o");
+    assert_eq(upper(s), "HELLO");
+    say("Strings OK");
+}
+
+func test_arrays() {
+    say("--- Arrays ---");
+    auto a = [3, 1, 2];
+    push(a, 4);
+    assert_eq(len(a), 4);
+    assert_eq(sort(a), [1, 2, 3, 4]);
+    assert_eq(map([1, 2, 3], func(x) { return x * 2; }), [2, 4, 6]);
+    say("Arrays OK");
+}
+
+func test_objects() {
+    say("--- Objects ---");
+    auto o = {name: "plix", version: 0.9};
+    assert_eq(o.name, "plix");
+    assert_eq(o["version"], 0.9);
+    assert_eq(keys(o), ["name", "version"]);
+    say("Objects OK");
+}
+
+func test_fs() {
+    say("--- File System ---");
+    fs.write("test.tmp", "hello plix");
+    assert(fs.exists("test.tmp"));
+    assert_eq(fs.read("test.tmp"), "hello plix");
+    fs.remove("test.tmp");
+    assert(!fs.exists("test.tmp"));
+    say("FS OK");
+}
+
+struct Point { x: float, y: float }
+impl Point {
+    func norm(self) -> float {
+        return sqrt(self.x * self.x + self.y * self.y);
+    }
+}
+
+func test_oop() {
+    say("--- OOP ---");
+    auto p = Point { x: 3.0, y: 4.0 };
+    assert_eq(p.norm(), 5.0);
+    say("OOP OK");
+}
+
+func add(a: int, b: int) -> int {
+    return a + b;
+}
+
+func test_gradual_typing() {
+    say("--- Gradual Typing ---");
+    assert_eq(add(10, 20), 30);
+    say("Gradual Typing OK");
+}
+
+test_math();
+test_strings();
+test_arrays();
+test_objects();
+test_fs();
+test_oop();
+test_gradual_typing();
+
+say("All tests passed!");

@@ -24,6 +24,8 @@ mod token;
 mod typecheck;
 mod wasm;
 
+mod pm;
+
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -47,6 +49,9 @@ fn main() -> ExitCode {
         "lint" => cmd_lint(&args[2..]),
         "lsp" => cmd_lsp(),
         "repl" => cmd_repl(),
+        "install" => cmd_install(&args[2..]),
+        "init" => cmd_init(&args[2..]),
+        "list" => cmd_list(),
         "--version" | "-V" | "version" => {
             println!("plix {}", VERSION);
             ExitCode::SUCCESS
@@ -63,6 +68,41 @@ fn main() -> ExitCode {
     }
 }
 
+fn cmd_install(args: &[String]) -> ExitCode {
+    if args.is_empty() {
+        eprintln!("usage: plix install <package>");
+        return ExitCode::from(2);
+    }
+    match pm::install_package(&args[0]) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("error: {}", e);
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn cmd_init(args: &[String]) -> ExitCode {
+    let name = args.first().cloned().unwrap_or_else(|| "my_plix_project".to_string());
+    match pm::init_project(&name) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("error: {}", e);
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn cmd_list() -> ExitCode {
+    match pm::list_packages() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("error: {}", e);
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn usage() {
     eprintln!(
         "plix {} — the Plix language
@@ -75,6 +115,9 @@ USAGE:
   plix test   [opts] [paths...]   run *_test.px suites (--filter, --fail-fast, --json)
   plix fmt    [--check] [paths...] format .px files
   plix lint   [paths...]          lint .px files
+  plix install <package>          install a package
+  plix init <name>               initialize a new project
+  plix list                       list installed packages
   plix lsp                       start the Language Server Protocol server
   plix repl                       interactive shell
   plix --version

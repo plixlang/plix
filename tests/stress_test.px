@@ -1,0 +1,36 @@
+// Plix v0.9.9 Stress Test
+
+func stress_recursion(n: int) -> int {
+    if (n <= 0) { return 0; }
+    return 1 + stress_recursion(n - 1);
+}
+
+func test_memory_cycles() {
+    say("Testing memory pressure...");
+    auto i = 0;
+    while (i < 10000) {
+        auto a = [1, 2, 3];
+        auto b = {data: a};
+        // a[0] = b; // چرخه (Cycle) که باعث نشت در ARC می‌شود
+        i += 1;
+    }
+    say("Memory test finished.");
+}
+
+func test_concurrency() {
+    say("Spawning 100 threads...");
+    auto i = 0;
+    while (i < 100) {
+        spawn(func() {
+            auto x = 2 * 2;
+        });
+        i += 1;
+    }
+    say("Concurrency burst finished.");
+}
+
+say("--- STRESS TEST START ---");
+say("Recursion(500): ${stress_recursion(500)}");
+test_memory_cycles();
+test_concurrency();
+say("--- STRESS TEST END ---");

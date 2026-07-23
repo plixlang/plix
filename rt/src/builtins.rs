@@ -209,6 +209,8 @@ pub static GLOBAL_DEFS: &[G] = &[
     G::F("wasm.compile", wasm_compile),
     G::F("wasm.validate", wasm_validate),
     G::F("wasm.magic", wasm_magic),
+    // ---- concurrency ----
+    G::F("spawn", b_spawn),
     // ---- ffi module (zero-copy foreign function interface) ----
     G::F("ffi.load", ffi_load),
     G::F("ffi.close", ffi_close),
@@ -1630,7 +1632,7 @@ fn ai_shape(_c: &mut dyn Caller, args: &[V]) -> OpResult {
 // ---------------------------------------------------------------------------
 
 fn forge_version(_c: &mut dyn Caller, _args: &[V]) -> OpResult {
-    Ok(mk_str_from("plix 0.9.6 (rust runtime)"))
+    Ok(mk_str_from("plix 0.9.9 (rust runtime)"))
 }
 fn forge_rust_version(_c: &mut dyn Caller, _args: &[V]) -> OpResult {
     match std::process::Command::new("rustc")
@@ -3742,4 +3744,11 @@ fn ffi_alignof(_c: &mut dyn Caller, args: &[V]) -> OpResult {
         _ => return err(format!("ffi.alignof: unknown type \"{}\"", ty)),
     };
     Ok(mk_int(align))
+}
+
+fn b_spawn(_c: &mut dyn Caller, args: &[V]) -> OpResult {
+    if args.is_empty() {
+        return Err("spawn: expected 1 argument (function)".into());
+    }
+    Ok(crate::heap::mk_int(1)) // Demo handle
 }

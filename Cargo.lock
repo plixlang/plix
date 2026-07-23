@@ -291,7 +291,7 @@ dependencies = [
 
 [[package]]
 name = "plix"
-version = "0.9.6"
+version = "0.9.9"
 dependencies = [
  "cranelift-codegen",
  "cranelift-frontend",
@@ -303,7 +303,7 @@ dependencies = [
 
 [[package]]
 name = "plixrt"
-version = "0.9.6"
+version = "0.9.9"
 
 [[package]]
 name = "proc-macro2"
