@@ -266,16 +266,54 @@ pub fn add(a: V, b: V) -> OpResult {
             None => mk_float_unchecked(x as f64 + y as f64),
         });
     }
-    // string concat
+    // string concat - optimized with RC==1 reuse and capacity doubling
     unsafe {
         if let (Some(HeapObj::Str(x)), Some(HeapObj::Str(y))) = (payload_opt(a), payload_opt(b)) {
-            let mut s = x.clone();
+            // fast path: if left string is uniquely owned (rc==1 or 2 including temp), reuse it
+            if is_ptr(a) {
+                let rc = (* (a as *const crate::heap::HeapBox)).rc.get();
+                if rc <= 2 {
+                    // try to mutate in place
+                    let p = payload_mut(a);
+                    if let HeapObj::Str(s) = &mut *p {
+                        // reserve extra to make strcat O(n) amortized: grow 1.5x
+                        let needed = s.len() + y.len();
+                        if s.capacity() < needed {
+                            let new_cap = (needed * 3 / 2 + 8).next_power_of_two().max(needed);
+                            s.reserve(new_cap - s.len());
+                        }
+                        s.push_str(y);
+                        // return same V without new allocation (keep rc)
+                        return Ok(a);
+                    }
+                }
+            }
+            // fallback: new allocation with spare capacity for future concats
+            let cap = (x.len() + y.len()) * 2 + 8;
+            let mut s = String::with_capacity(cap);
+            s.push_str(x);
             s.push_str(y);
             return Ok(mk_string(s));
         }
         if let (Some(HeapObj::Array(x)), Some(HeapObj::Array(y))) = (payload_opt(a), payload_opt(b))
         {
-            let mut v = x.clone();
+            // array concat reuse if rc<=2
+            if is_ptr(a) {
+                let rc = (* (a as *const crate::heap::HeapBox)).rc.get();
+                if rc <= 2 {
+                    let p = payload_mut(a);
+                    if let HeapObj::Array(arr) = &mut *p {
+                        arr.reserve(y.len());
+                        for &v in y.iter() {
+                            retain_locked(v);
+                            arr.push(v);
+                        }
+                        return Ok(a);
+                    }
+                }
+            }
+            let mut v = Vec::with_capacity(x.len() + y.len());
+            v.extend(x.iter().copied());
             v.extend(y.iter().copied());
             return Ok(mk_array(v));
         }
