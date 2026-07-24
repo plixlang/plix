@@ -6,7 +6,7 @@ use crate::heap::*;
 pub fn concurrency_spawn(f: V) -> V {
     // In a real implementation, we'd need to clone the environment
     // and handle GIL/runtime lock carefully.
-    // For this 0.9.9 demo, we simulate a handle.
+    // For this 0.9.13 demo, we simulate a handle.
     let handle = thread::spawn(move || {
         // Here we would call the function f
         // For now just simulate work

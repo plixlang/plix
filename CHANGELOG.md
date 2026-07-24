@@ -5,7 +5,7 @@ All notable user-facing changes are documented here. Plix follows
 may make compatible or incompatible changes; migration notes will identify
 any known breakage.
 
-## [0.9.9] - 2026-07-21
+## [0.9.13] - 2026-07-23
 
 ### Added
 

@@ -7,14 +7,14 @@
 //!   - `py`      — Python bridge (FFI)
 //!   - `ai`      — AI/numpy helpers
 //!   - `forge`   — Rust ecosystem bridge (cargo, versions)
-//!   - `docker`  — container management via Docker CLI (v0.9.9)
-//!   - `security`— sandbox execution, file access control, hashing (v0.9.9)
-//!   - `docs`    — doc comment extraction + JSON/HTML/Markdown (v0.9.9)
-//!   - `lsp`     — Language Server Protocol utilities (v0.9.9)
-//!   - `wasm`    — WebAssembly output utilities (v0.9.9)
-//!   - `ffi`     — zero-copy foreign function interface (v0.9.9)
+//!   - `docker`  — container management via Docker CLI (v0.9.13)
+//!   - `security`— sandbox execution, file access control, hashing (v0.9.13)
+//!   - `docs`    — doc comment extraction + JSON/HTML/Markdown (v0.9.13)
+//!   - `lsp`     — Language Server Protocol utilities (v0.9.13)
+//!   - `wasm`    — WebAssembly output utilities (v0.9.13)
+//!   - `ffi`     — zero-copy foreign function interface (v0.9.13)
 //!
-//! Toolchain features added in v0.9.9:
+//! Toolchain features added in v0.9.13:
 //!   - `plix lsp` command — full LSP server over stdin/stdout JSON-RPC
 //!   - `plix build --target wasm` — WASM codegen backend
 //!

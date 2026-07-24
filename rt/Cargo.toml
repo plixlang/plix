@@ -1,6 +1,6 @@
 [package]
 name = "plixrt"
-version = "0.9.9"
+version = "0.9.13"
 edition = "2021"
 rust-version = "1.85"
 description = "Plix runtime library: tagged values, heap, operations, stdlib, Python FFI. Linked into the plix toolchain and into every compiled Plix program."

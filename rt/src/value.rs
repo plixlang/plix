@@ -271,7 +271,7 @@ pub fn add(a: V, b: V) -> OpResult {
         if let (Some(HeapObj::Str(x)), Some(HeapObj::Str(y))) = (payload_opt(a), payload_opt(b)) {
             // fast path: if left string is uniquely owned (rc==1 or 2 including temp), reuse it
             if is_ptr(a) {
-                let rc = (* (a as *const crate::heap::HeapBox)).rc.get();
+                let rc = (*(a as *const crate::heap::HeapBox)).rc.get();
                 if rc <= 2 {
                     // try to mutate in place
                     let p = payload_mut(a);
@@ -299,7 +299,7 @@ pub fn add(a: V, b: V) -> OpResult {
         {
             // array concat reuse if rc<=2
             if is_ptr(a) {
-                let rc = (* (a as *const crate::heap::HeapBox)).rc.get();
+                let rc = (*(a as *const crate::heap::HeapBox)).rc.get();
                 if rc <= 2 {
                     let p = payload_mut(a);
                     if let HeapObj::Array(arr) = &mut *p {

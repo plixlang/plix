@@ -1,6 +1,6 @@
 [package]
 name = "plix"
-version = "0.9.9"
+version = "0.9.13"
 edition = "2024"
 rust-version = "1.85"
 description = "The Plix programming language: interpreter + native (Cranelift) compiler, dual memory management, Python FFI."

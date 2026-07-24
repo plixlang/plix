@@ -3,7 +3,7 @@
     clippy::explicit_counter_loop,
     reason = "The explicit forms make interpreter control-flow and argument diagnostics easier to audit."
 )]
-//! Plix tree-walking interpreter v0.9.5
+//! Plix tree-walking interpreter v0.9.13
 //!
 //! Shares all value semantics with native code through plixrt: numbers,
 //! strings, containers, operators, builtins, modules, the Python bridge.

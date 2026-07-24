@@ -1632,7 +1632,7 @@ fn ai_shape(_c: &mut dyn Caller, args: &[V]) -> OpResult {
 // ---------------------------------------------------------------------------
 
 fn forge_version(_c: &mut dyn Caller, _args: &[V]) -> OpResult {
-    Ok(mk_str_from("plix 0.9.9 (rust runtime)"))
+    Ok(mk_str_from("plix 0.9.13 (rust runtime)"))
 }
 fn forge_rust_version(_c: &mut dyn Caller, _args: &[V]) -> OpResult {
     match std::process::Command::new("rustc")

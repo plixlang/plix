@@ -3,7 +3,7 @@
     clippy::drop_non_drop,
     reason = "Code generator helpers share a deliberately explicit compilation context; temporary drops delimit builder borrows."
 )]
-//! Native code generation v0.9.5: native code generation
+//! Native code generation v0.9.13: native code generation
 //! standalone executable (system cc + embedded libplixrt.a).
 //!
 //! Model:
@@ -75,20 +75,44 @@ fn expr_is_pure_int(e: &Expr) -> bool {
         ExprKind::Int(_) => true,
         ExprKind::Ident(_) => true, // assume int var is pure
         ExprKind::Binary(op, a, b) => {
-            matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Mod | BinOp::Div | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge | BinOp::Eq | BinOp::Ne | BinOp::BAnd | BinOp::BOr | BinOp::BXor | BinOp::Shl | BinOp::Shr)
-                && expr_is_pure_int(a) && expr_is_pure_int(b)
+            matches!(
+                op,
+                BinOp::Add
+                    | BinOp::Sub
+                    | BinOp::Mul
+                    | BinOp::Mod
+                    | BinOp::Div
+                    | BinOp::Lt
+                    | BinOp::Le
+                    | BinOp::Gt
+                    | BinOp::Ge
+                    | BinOp::Eq
+                    | BinOp::Ne
+                    | BinOp::BAnd
+                    | BinOp::BOr
+                    | BinOp::BXor
+                    | BinOp::Shl
+                    | BinOp::Shr
+            ) && expr_is_pure_int(a)
+                && expr_is_pure_int(b)
         }
         ExprKind::Unary(op, x) => {
             matches!(op, UnOp::Neg | UnOp::BitNot | UnOp::Not) && expr_is_pure_int(x)
         }
-        ExprKind::Ternary(c, a, b) => expr_is_pure_int(c) && expr_is_pure_int(a) && expr_is_pure_int(b),
+        ExprKind::Ternary(c, a, b) => {
+            expr_is_pure_int(c) && expr_is_pure_int(a) && expr_is_pure_int(b)
+        }
         _ => false,
     }
 }
 
 fn expr_may_alloc(e: &Expr) -> bool {
     match &e.node {
-        ExprKind::Null | ExprKind::Bool(_) | ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Ident(_) => false,
+        ExprKind::Null
+        | ExprKind::Bool(_)
+        | ExprKind::Int(_)
+        | ExprKind::Float(_)
+        | ExprKind::Ident(_) => false,
         ExprKind::Str(_) => true, // string allocation
         ExprKind::Array(_) => true,
         ExprKind::Object(_) => true,
@@ -112,14 +136,17 @@ fn expr_may_alloc(e: &Expr) -> bool {
         ExprKind::Assign { value, .. } => expr_may_alloc(value),
         ExprKind::Index(o, i) => expr_may_alloc(o) || expr_may_alloc(i),
         ExprKind::Slice { obj, start, end } => {
-            expr_may_alloc(obj) || start.as_ref().map(|e| expr_may_alloc(e)).unwrap_or(false) || end.as_ref().map(|e| expr_may_alloc(e)).unwrap_or(false)
+            expr_may_alloc(obj)
+                || start.as_ref().map(|e| expr_may_alloc(e)).unwrap_or(false)
+                || end.as_ref().map(|e| expr_may_alloc(e)).unwrap_or(false)
         }
         ExprKind::Member(o, _) => expr_may_alloc(o),
         ExprKind::Match { subject, arms } => {
-            expr_may_alloc(subject) || arms.iter().any(|a| match &a.body {
-                MatchBody::Expr(e) => expr_may_alloc(e),
-                MatchBody::Block(stmts) => stmts.iter().any(|s| stmt_may_alloc(s)),
-            })
+            expr_may_alloc(subject)
+                || arms.iter().any(|a| match &a.body {
+                    MatchBody::Expr(e) => expr_may_alloc(e),
+                    MatchBody::Block(stmts) => stmts.iter().any(|s| stmt_may_alloc(s)),
+                })
         }
         ExprKind::Borrow { expr, .. } => expr_may_alloc(expr),
     }
@@ -131,12 +158,17 @@ fn stmt_may_alloc(s: &Stmt) -> bool {
         StmtKind::ExprStmt(e) => expr_may_alloc(e),
         StmtKind::Block(stmts) => stmts.iter().any(|st| stmt_may_alloc(st)),
         StmtKind::If { cond, then, els } => {
-            expr_may_alloc(cond) || stmt_may_alloc(then) || els.as_ref().map(|e| stmt_may_alloc(e)).unwrap_or(false)
+            expr_may_alloc(cond)
+                || stmt_may_alloc(then)
+                || els.as_ref().map(|e| stmt_may_alloc(e)).unwrap_or(false)
         }
-        StmtKind::While { cond, body } => {
-            expr_may_alloc(cond) || stmt_may_alloc(body)
-        }
-        StmtKind::ForC { init, cond, step, body } => {
+        StmtKind::While { cond, body } => expr_may_alloc(cond) || stmt_may_alloc(body),
+        StmtKind::ForC {
+            init,
+            cond,
+            step,
+            body,
+        } => {
             init.as_ref().map(|i| stmt_may_alloc(i)).unwrap_or(false)
                 || cond.as_ref().map(|c| expr_may_alloc(c)).unwrap_or(false)
                 || step.as_ref().map(|st| expr_may_alloc(st)).unwrap_or(false)
@@ -144,10 +176,11 @@ fn stmt_may_alloc(s: &Stmt) -> bool {
         }
         StmtKind::ForIn { iter, body, .. } => expr_may_alloc(iter) || stmt_may_alloc(body),
         StmtKind::MatchStmt { subject, arms } => {
-            expr_may_alloc(subject) || arms.iter().any(|a| match &a.body {
-                MatchBody::Expr(e) => expr_may_alloc(e),
-                MatchBody::Block(stmts) => stmts.iter().any(|s| stmt_may_alloc(s)),
-            })
+            expr_may_alloc(subject)
+                || arms.iter().any(|a| match &a.body {
+                    MatchBody::Expr(e) => expr_may_alloc(e),
+                    MatchBody::Block(stmts) => stmts.iter().any(|s| stmt_may_alloc(s)),
+                })
         }
         StmtKind::Return(Some(e)) => expr_may_alloc(e),
         StmtKind::Return(None) => false,
@@ -3545,11 +3578,16 @@ impl Compiler {
                         let locals = fe.locals_all.clone();
                         let rv = fe.ret_var;
                         let tname = def.name.clone();
-                        Self::finish_body(em.shared, &mut fb, &locals, rv, epilogue, err_blk, &tname)?;
+                        Self::finish_body(
+                            em.shared, &mut fb, &locals, rv, epilogue, err_blk, &tname,
+                        )?;
                         drop(em);
                         fb.seal_all_blocks();
                         fb.finalize();
-                        self.shared.module.define_function(fid, &mut self.ctx).map_err(|e| format!("define fn {}: {}", def.name, e))?;
+                        self.shared
+                            .module
+                            .define_function(fid, &mut self.ctx)
+                            .map_err(|e| format!("define fn {}: {}", def.name, e))?;
                         return Ok(());
                     }
                 }

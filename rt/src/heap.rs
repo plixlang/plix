@@ -1,4 +1,4 @@
-//! Plix runtime heap - OPTIMIZED VERSION v0.9.10
+//! Plix runtime heap - OPTIMIZED VERSION v0.9.13
 //! - Thread-local arenas, no global Mutex (10x faster for single-threaded benchmarks)
 //! - Fast path for int-tagged values
 //! - String concat reuse when RC==1
@@ -17,17 +17,33 @@ pub const INT_MIN: i64 = -(1i64 << 62);
 pub const INT_MAX: i64 = (1i64 << 62) - 1;
 
 #[inline]
-pub fn is_int(v: V) -> bool { v & 1 == 1 }
+pub fn is_int(v: V) -> bool {
+    v & 1 == 1
+}
 #[inline]
-pub fn is_ptr(v: V) -> bool { (v & 1) == 0 && v > 6 }
+pub fn is_ptr(v: V) -> bool {
+    (v & 1) == 0 && v > 6
+}
 #[inline]
-pub fn is_null(v: V) -> bool { v == NULL }
+pub fn is_null(v: V) -> bool {
+    v == NULL
+}
 #[inline]
-pub fn is_bool(v: V) -> bool { v == TRUE || v == FALSE }
+pub fn is_bool(v: V) -> bool {
+    v == TRUE || v == FALSE
+}
 #[inline]
-pub fn as_int(v: V) -> i64 { (v as i64) >> 1 }
+pub fn as_int(v: V) -> i64 {
+    (v as i64) >> 1
+}
 #[inline]
-pub fn bool_of(b: bool) -> V { if b { TRUE } else { FALSE } }
+pub fn bool_of(b: bool) -> V {
+    if b {
+        TRUE
+    } else {
+        FALSE
+    }
+}
 
 pub struct FieldInfo {
     pub name: String,
@@ -50,14 +66,27 @@ pub enum HeapObj {
     Array(Vec<V>),
     Map(HashMap<String, V>),
     Cell(V),
-    ClsNative { code: usize, cells: Vec<V>, name: String },
-    ClsAst { fn_id: u32, env: usize },
+    ClsNative {
+        code: usize,
+        cells: Vec<V>,
+        name: String,
+    },
+    ClsAst {
+        fn_id: u32,
+        env: usize,
+    },
     Builtin(u32),
     PyObj(*mut c_void),
     PyBound(*mut c_void, CString),
     StructDef(Box<StructInfo>),
-    Instance { def: V, fields: Vec<V> },
-    Bound { recv: V, f: V },
+    Instance {
+        def: V,
+        fields: Vec<V>,
+    },
+    Bound {
+        recv: V,
+        f: V,
+    },
     Buffer(Vec<u8>),
     ForeignLib(*mut c_void),
 }
@@ -82,7 +111,9 @@ thread_local! {
 // Dummy guard for compatibility - no-op lock
 pub struct DummyGuard;
 #[inline]
-pub fn lock() -> DummyGuard { DummyGuard }
+pub fn lock() -> DummyGuard {
+    DummyGuard
+}
 
 #[inline]
 fn with_state<R>(f: impl FnOnce(&mut State) -> R) -> R {
@@ -122,7 +153,9 @@ pub unsafe fn retain_locked(v: V) {
 }
 
 pub unsafe fn release_locked(v: V) {
-    if !is_ptr(v) { return; }
+    if !is_ptr(v) {
+        return;
+    }
     let b = heap(v);
     let rc = b.rc.get();
     if rc <= 1 {
@@ -136,29 +169,43 @@ unsafe fn free_locked(v: V) {
     let b = heap(v);
     match &*b.obj.get() {
         HeapObj::Array(items) => {
-            for &c in items.iter() { release_locked(c); }
+            for &c in items.iter() {
+                release_locked(c);
+            }
         }
         HeapObj::Map(m) => {
-            for &c in m.values() { release_locked(c); }
+            for &c in m.values() {
+                release_locked(c);
+            }
         }
         HeapObj::Cell(c) => release_locked(*c),
         HeapObj::ClsNative { cells, .. } => {
-            for &c in cells.iter() { release_locked(c); }
+            for &c in cells.iter() {
+                release_locked(c);
+            }
         }
         HeapObj::ClsAst { .. } => {}
         HeapObj::PyObj(p) | HeapObj::PyBound(p, _) => {
             crate::pyffi::py_decref_locked(*p);
         }
         HeapObj::StructDef(info) => {
-            for f in &info.fields { release_locked(f.default); }
-            for &m in info.methods.values() { release_locked(m); }
+            for f in &info.fields {
+                release_locked(f.default);
+            }
+            for &m in info.methods.values() {
+                release_locked(m);
+            }
             for tbl in info.traits.values() {
-                for &m in tbl.values() { release_locked(m); }
+                for &m in tbl.values() {
+                    release_locked(m);
+                }
             }
         }
         HeapObj::Instance { def, fields } => {
             release_locked(*def);
-            for &c in fields.iter() { release_locked(c); }
+            for &c in fields.iter() {
+                release_locked(c);
+            }
         }
         HeapObj::Bound { recv, f } => {
             release_locked(*recv);
@@ -168,7 +215,9 @@ unsafe fn free_locked(v: V) {
         HeapObj::ForeignLib(p) => {
             if !p.is_null() {
                 #[cfg(unix)]
-                unsafe { let _ = libc_dlclose(*p); }
+                unsafe {
+                    let _ = libc_dlclose(*p);
+                }
             }
         }
         _ => {}
@@ -210,7 +259,9 @@ pub fn mk_string_reuse_or_new(mut base: String, extra: &str) -> V {
 
 pub fn mk_array(items: Vec<V>) -> V {
     unsafe {
-        for &it in &items { retain_locked(it); }
+        for &it in &items {
+            retain_locked(it);
+        }
         alloc_locked(HeapObj::Array(items))
     }
 }
@@ -220,17 +271,24 @@ pub fn mk_map(m: HashMap<String, V>) -> V {
 }
 
 pub unsafe fn mk_map_locked(m: HashMap<String, V>) -> V {
-    for &val in m.values() { retain_locked(val); }
+    for &val in m.values() {
+        retain_locked(val);
+    }
     alloc_locked(HeapObj::Map(m))
 }
 
 pub fn mk_cell(v: V) -> V {
-    unsafe { retain_locked(v); alloc_locked(HeapObj::Cell(v)) }
+    unsafe {
+        retain_locked(v);
+        alloc_locked(HeapObj::Cell(v))
+    }
 }
 
 pub fn mk_cls_native(code: usize, cells: Vec<V>, name: String) -> V {
     unsafe {
-        for &c in &cells { retain_locked(c); }
+        for &c in &cells {
+            retain_locked(c);
+        }
         alloc_locked(HeapObj::ClsNative { code, cells, name })
     }
 }
@@ -258,7 +316,9 @@ pub fn mk_structdef(info: StructInfo) -> V {
 pub fn mk_instance(def: V, fields: Vec<V>) -> V {
     unsafe {
         retain_locked(def);
-        for &c in &fields { retain_locked(c); }
+        for &c in &fields {
+            retain_locked(c);
+        }
         alloc_locked(HeapObj::Instance { def, fields })
     }
 }
@@ -290,7 +350,9 @@ pub fn is_foreign_lib(v: V) -> bool {
 }
 
 pub unsafe fn struct_info(def: V) -> Option<&'static StructInfo> {
-    if !is_ptr(def) { return None; }
+    if !is_ptr(def) {
+        return None;
+    }
     match payload(def) {
         HeapObj::StructDef(info) => Some(info),
         _ => None,
@@ -298,7 +360,9 @@ pub unsafe fn struct_info(def: V) -> Option<&'static StructInfo> {
 }
 
 pub unsafe fn instance_info(inst: V) -> Option<&'static StructInfo> {
-    if !is_ptr(inst) { return None; }
+    if !is_ptr(inst) {
+        return None;
+    }
     match payload(inst) {
         HeapObj::Instance { def, .. } => struct_info(*def),
         _ => None,
@@ -314,7 +378,9 @@ pub unsafe fn payload_mut(v: V) -> *mut HeapObj {
 }
 
 pub fn as_float(v: V) -> f64 {
-    if is_int(v) { return as_int(v) as f64; }
+    if is_int(v) {
+        return as_int(v) as f64;
+    }
     unsafe {
         match payload(v) {
             HeapObj::Float(f) => *f,
@@ -360,9 +426,15 @@ pub fn map_ref<R>(v: V, f: impl FnOnce(&HashMap<String, V>) -> R) -> R {
 }
 
 pub fn kind_name(v: V) -> &'static str {
-    if is_null(v) { return "null"; }
-    if is_bool(v) { return "bool"; }
-    if is_int(v) { return "int"; }
+    if is_null(v) {
+        return "null";
+    }
+    if is_bool(v) {
+        return "bool";
+    }
+    if is_int(v) {
+        return "int";
+    }
     unsafe {
         match payload(v) {
             HeapObj::Float(_) => "float",
@@ -396,11 +468,16 @@ pub fn guard_msg_int(what: &str) -> String {
 }
 
 pub fn as_f64_checked(v: V) -> Result<f64, String> {
-    if is_int(v) { return Ok(as_int(v) as f64); }
+    if is_int(v) {
+        return Ok(as_int(v) as f64);
+    }
     unsafe {
         match payload_opt_pub(v) {
             Some(HeapObj::Float(f)) => Ok(*f),
-            _ => Err(format!("expected float-compatible numeric, got {}", type_name(v))),
+            _ => Err(format!(
+                "expected float-compatible numeric, got {}",
+                type_name(v)
+            )),
         }
     }
 }
@@ -415,7 +492,11 @@ pub unsafe fn struct_name_of(v: V) -> Option<String> {
 }
 
 pub unsafe fn payload_opt_pub(v: V) -> Option<&'static HeapObj> {
-    if is_ptr(v) { Some(payload(v)) } else { None }
+    if is_ptr(v) {
+        Some(payload(v))
+    } else {
+        None
+    }
 }
 
 // Arenas / Frames - now lock-free thread-local
@@ -424,11 +505,15 @@ pub fn frame_push() {
 }
 
 pub fn frame_pop_return(ret: V) {
-    unsafe { retain_locked(ret); }
+    unsafe {
+        retain_locked(ret);
+    }
     with_state(|st| {
         if let Some(arena) = st.arenas.pop() {
             for v in arena {
-                unsafe { release_locked(v); }
+                unsafe {
+                    release_locked(v);
+                }
             }
         }
         if is_ptr(ret) {
@@ -437,7 +522,9 @@ pub fn frame_pop_return(ret: V) {
             }
         }
     });
-    unsafe { release_locked(ret); }
+    unsafe {
+        release_locked(ret);
+    }
 }
 
 pub fn arena_checkpoint() -> usize {
@@ -458,7 +545,9 @@ pub fn arena_rewind(cp: usize) {
     });
     if let Some(r) = rest {
         for v in r {
-            unsafe { release_locked(v); }
+            unsafe {
+                release_locked(v);
+            }
         }
     }
 }
@@ -562,12 +651,16 @@ pub fn take_error() -> Option<String> {
 pub fn trace_push(name: &str) {
     TRACE.with(|t| {
         let mut t = t.borrow_mut();
-        if t.len() < 512 { t.push(name.to_string()); }
+        if t.len() < 512 {
+            t.push(name.to_string());
+        }
     })
 }
 
 pub fn trace_pop() {
-    TRACE.with(|t| { t.borrow_mut().pop(); });
+    TRACE.with(|t| {
+        t.borrow_mut().pop();
+    });
 }
 
 pub fn trace_snapshot() -> Vec<String> {
@@ -593,7 +686,9 @@ pub fn print_error_and_clear() {
 }
 
 unsafe fn cstr<'a>(p: *const c_char, len: i64) -> &'a str {
-    if p.is_null() || len <= 0 { return ""; }
+    if p.is_null() || len <= 0 {
+        return "";
+    }
     let s = std::slice::from_raw_parts(p as *const u8, len as usize);
     std::str::from_utf8(s).unwrap_or("")
 }
@@ -612,7 +707,9 @@ pub extern "C" fn plix_rt_shutdown() {
 }
 
 #[no_mangle]
-pub extern "C" fn plix_int(i: i64) -> V { mk_int(i) }
+pub extern "C" fn plix_int(i: i64) -> V {
+    mk_int(i)
+}
 
 #[no_mangle]
 pub extern "C" fn plix_float_bits(bits: u64) -> V {
@@ -620,10 +717,14 @@ pub extern "C" fn plix_float_bits(bits: u64) -> V {
 }
 
 #[no_mangle]
-pub extern "C" fn plix_bool(b: i8) -> V { bool_of(b != 0) }
+pub extern "C" fn plix_bool(b: i8) -> V {
+    bool_of(b != 0)
+}
 
 #[no_mangle]
-pub extern "C" fn plix_null() -> V { NULL }
+pub extern "C" fn plix_null() -> V {
+    NULL
+}
 
 #[no_mangle]
 pub extern "C" fn plix_retain(v: V) -> V {
@@ -637,7 +738,13 @@ pub extern "C" fn plix_release(v: V) {
 }
 
 #[no_mangle]
-pub extern "C" fn plix_err_flag() -> i64 { if err_flag() { 1 } else { 0 } }
+pub extern "C" fn plix_err_flag() -> i64 {
+    if err_flag() {
+        1
+    } else {
+        0
+    }
+}
 
 #[no_mangle]
 pub unsafe extern "C" fn plix_set_error(p: *const c_char, len: i64) {
@@ -645,7 +752,9 @@ pub unsafe extern "C" fn plix_set_error(p: *const c_char, len: i64) {
 }
 
 #[no_mangle]
-pub extern "C" fn plix_print_error() { print_error_and_clear(); }
+pub extern "C" fn plix_print_error() {
+    print_error_and_clear();
+}
 
 #[no_mangle]
 pub unsafe extern "C" fn plix_trace_push(p: *const c_char, len: i64) {
@@ -653,10 +762,14 @@ pub unsafe extern "C" fn plix_trace_push(p: *const c_char, len: i64) {
 }
 
 #[no_mangle]
-pub extern "C" fn plix_trace_pop() { trace_pop(); }
+pub extern "C" fn plix_trace_pop() {
+    trace_pop();
+}
 
 #[no_mangle]
-pub extern "C" fn plix_frame_push() { frame_push(); }
+pub extern "C" fn plix_frame_push() {
+    frame_push();
+}
 
 #[no_mangle]
 pub extern "C" fn plix_frame_pop(ret: V) -> V {
@@ -685,7 +798,9 @@ pub extern "C" fn plix_global_get(i: i64) -> V {
 }
 
 #[no_mangle]
-pub extern "C" fn plix_cell_new(v: V) -> V { mk_cell(v) }
+pub extern "C" fn plix_cell_new(v: V) -> V {
+    mk_cell(v)
+}
 
 #[no_mangle]
 pub extern "C" fn plix_cell_get(cell: V) -> V {
@@ -698,7 +813,9 @@ pub extern "C" fn plix_cell_get(cell: V) -> V {
 }
 
 #[no_mangle]
-pub extern "C" fn plix_var_use(v: V) -> V { use_var(v) }
+pub extern "C" fn plix_var_use(v: V) -> V {
+    use_var(v)
+}
 
 #[no_mangle]
 pub extern "C" fn plix_cell_set(cell: V, v: V) {
@@ -753,9 +870,14 @@ pub fn structdef_add_method(def: V, trait_name: Option<&str>, name: &str, fv: V)
         retain_locked(fv);
         if let HeapObj::StructDef(info) = &mut *payload_mut(def) {
             match trait_name {
-                None => { info.methods.insert(name.to_string(), fv); }
+                None => {
+                    info.methods.insert(name.to_string(), fv);
+                }
                 Some(t) => {
-                    info.traits.entry(t.to_string()).or_default().insert(name.to_string(), fv);
+                    info.traits
+                        .entry(t.to_string())
+                        .or_default()
+                        .insert(name.to_string(), fv);
                 }
             }
         }
@@ -777,7 +899,9 @@ pub unsafe extern "C" fn plix_struct_field(
     default: V,
     has_default: i64,
 ) -> V {
-    if err_flag() { return 0; }
+    if err_flag() {
+        return 0;
+    }
     let name = unsafe { cstr(kp, kl) }.to_string();
     let ty = unsafe { cstr(tp, tl) }.to_string();
     structdef_add_field(def, &name, &ty, default, has_default != 0);
@@ -793,7 +917,9 @@ pub unsafe extern "C" fn plix_struct_method(
     tp: *const c_char,
     tl: i64,
 ) -> V {
-    if err_flag() { return 0; }
+    if err_flag() {
+        return 0;
+    }
     let name = unsafe { cstr(kp, kl) }.to_string();
     let tname = unsafe { cstr(tp, tl) };
     let trait_name = if tname.is_empty() { None } else { Some(tname) };
@@ -809,17 +935,25 @@ pub unsafe extern "C" fn plix_instance_new(
     vals: *const V,
     n: i64,
 ) -> V {
-    if err_flag() { return 0; }
+    if err_flag() {
+        return 0;
+    }
     let raw = if names.is_null() || nlen <= 0 {
         String::new()
     } else {
         let s = unsafe { std::slice::from_raw_parts(names as *const u8, nlen as usize) };
         String::from_utf8_lossy(s).into_owned()
     };
-    let keys: Vec<String> = if raw.is_empty() { Vec::new() } else { raw.split('\0').map(|s| s.to_string()).collect() };
+    let keys: Vec<String> = if raw.is_empty() {
+        Vec::new()
+    } else {
+        raw.split('\0').map(|s| s.to_string()).collect()
+    };
     let valvs: Vec<V> = if n > 0 && !vals.is_null() {
         unsafe { std::slice::from_raw_parts(vals, n as usize).to_vec() }
-    } else { Vec::new() };
+    } else {
+        Vec::new()
+    };
     let mut pairs: Vec<(String, V)> = Vec::new();
     for (i, k) in keys.into_iter().enumerate() {
         let v = *valvs.get(i).unwrap_or(&NULL);
@@ -827,28 +961,40 @@ pub unsafe extern "C" fn plix_instance_new(
     }
     match crate::value::instantiate(def, pairs) {
         Ok(x) => x,
-        Err(e) => { set_error(e); 0 }
+        Err(e) => {
+            set_error(e);
+            0
+        }
     }
 }
 
 #[no_mangle]
-pub extern "C" fn plix_unbox_f64(v: V) -> f64 { as_float(v) }
+pub extern "C" fn plix_unbox_f64(v: V) -> f64 {
+    as_float(v)
+}
 
 #[no_mangle]
 pub extern "C" fn plix_box_f64(f: f64) -> V {
-    if err_flag() { return 0; }
+    if err_flag() {
+        return 0;
+    }
     mk_float_unchecked(f)
 }
 
 #[no_mangle]
 pub extern "C" fn plix_as_f64(v: V) -> f64 {
-    if is_int(v) { return as_int(v) as f64; }
+    if is_int(v) {
+        return as_int(v) as f64;
+    }
     unsafe {
         if let HeapObj::Float(f) = payload_opt_pub(v).unwrap_or(&HeapObj::Float(0.0)) {
             return *f;
         }
     }
-    set_error(format!("expected float-compatible numeric, got {}", type_name(v)));
+    set_error(format!(
+        "expected float-compatible numeric, got {}",
+        type_name(v)
+    ));
     0.0
 }
 
@@ -856,14 +1002,20 @@ pub fn mk_variant(name: &str, payload: V, has_payload: bool) -> V {
     let mut m = HashMap::new();
     m.insert("__tag".to_string(), mk_str_from(name));
     m.insert("__has".to_string(), bool_of(has_payload));
-    if has_payload { m.insert("0".to_string(), payload); }
+    if has_payload {
+        m.insert("0".to_string(), payload);
+    }
     mk_map(m)
 }
 
 pub fn variant_is(v: V, name: &str) -> bool {
     unsafe {
-        let Some(HeapObj::Map(m)) = payload_opt_pub(v) else { return false; };
-        let Some(&tag) = m.get("__tag") else { return false; };
+        let Some(HeapObj::Map(m)) = payload_opt_pub(v) else {
+            return false;
+        };
+        let Some(&tag) = m.get("__tag") else {
+            return false;
+        };
         match payload_opt_pub(tag) {
             Some(HeapObj::Str(s)) => s == name,
             _ => false,
@@ -873,7 +1025,9 @@ pub fn variant_is(v: V, name: &str) -> bool {
 
 pub fn variant_field(v: V, idx: usize) -> V {
     unsafe {
-        let Some(HeapObj::Map(m)) = payload_opt_pub(v) else { return NULL; };
+        let Some(HeapObj::Map(m)) = payload_opt_pub(v) else {
+            return NULL;
+        };
         m.get(&idx.to_string()).copied().unwrap_or(NULL)
     }
 }
@@ -887,13 +1041,21 @@ pub unsafe extern "C" fn plix_variant_new(p: *const c_char, len: i64) -> V {
 #[no_mangle]
 pub unsafe extern "C" fn plix_variant_is(v: V, p: *const c_char, len: i64) -> i64 {
     let name = unsafe { cstr(p, len) };
-    if name == "Some" { return if !is_null(v) { 1 } else { 0 }; }
-    if variant_is(v, name) { 1 } else { 0 }
+    if name == "Some" {
+        return if !is_null(v) { 1 } else { 0 };
+    }
+    if variant_is(v, name) {
+        1
+    } else {
+        0
+    }
 }
 
 #[no_mangle]
 pub extern "C" fn plix_variant_field(v: V, idx: i64) -> V {
-    if idx < 0 { return NULL; }
+    if idx < 0 {
+        return NULL;
+    }
     if !is_null(v) && idx == 0 && !variant_is(v, "Ok") && !variant_is(v, "Err") {
         return v;
     }
@@ -912,11 +1074,17 @@ pub fn sys_dlopen(path: &str) -> *mut c_void {
     #[cfg(windows)]
     {
         use std::os::windows::ffi::OsStrExt;
-        let wide: Vec<u16> = std::ffi::OsStr::new(path).encode_wide().chain(std::iter::once(0)).collect();
+        let wide: Vec<u16> = std::ffi::OsStr::new(path)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
         unsafe { win_LoadLibraryW(wide.as_ptr()) }
     }
     #[cfg(not(any(unix, windows)))]
-    { let _ = path; std::ptr::null_mut() }
+    {
+        let _ = path;
+        std::ptr::null_mut()
+    }
 }
 
 pub fn sys_dlsym(handle: *mut c_void, name: &str) -> *mut c_void {
@@ -924,15 +1092,35 @@ pub fn sys_dlsym(handle: *mut c_void, name: &str) -> *mut c_void {
         Ok(s) => s,
         Err(_) => return std::ptr::null_mut(),
     };
-    #[cfg(unix)] { unsafe { libc_dlsym(handle, c_name.as_ptr()) } }
-    #[cfg(windows)] { unsafe { win_GetProcAddress(handle, c_name.as_ptr() as *const u8) } }
-    #[cfg(not(any(unix, windows)))] { let _ = (handle, c_name); std::ptr::null_mut() }
+    #[cfg(unix)]
+    {
+        unsafe { libc_dlsym(handle, c_name.as_ptr()) }
+    }
+    #[cfg(windows)]
+    {
+        unsafe { win_GetProcAddress(handle, c_name.as_ptr() as *const u8) }
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (handle, c_name);
+        std::ptr::null_mut()
+    }
 }
 
 pub fn sys_dlclose(handle: *mut c_void) -> i32 {
-    #[cfg(unix)] { unsafe { libc_dlclose(handle) } }
-    #[cfg(windows)] { unsafe { win_FreeLibrary(handle) as i32 } }
-    #[cfg(not(any(unix, windows)))] { let _ = handle; -1 }
+    #[cfg(unix)]
+    {
+        unsafe { libc_dlclose(handle) }
+    }
+    #[cfg(windows)]
+    {
+        unsafe { win_FreeLibrary(handle) as i32 }
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = handle;
+        -1
+    }
 }
 
 #[cfg(unix)]
@@ -944,10 +1132,20 @@ mod libc_raw {
         pub fn dlclose(handle: *mut c_void) -> i32;
     }
 }
-#[cfg(unix)] const RTLD_NOW: i32 = 2;
-#[cfg(unix)] fn libc_dlopen(path: *const i8) -> *mut c_void { unsafe { libc_raw::dlopen(path, RTLD_NOW) } }
-#[cfg(unix)] fn libc_dlsym(handle: *mut c_void, name: *const i8) -> *mut c_void { unsafe { libc_raw::dlsym(handle, name) } }
-#[cfg(unix)] fn libc_dlclose(handle: *mut c_void) -> i32 { unsafe { libc_raw::dlclose(handle) } }
+#[cfg(unix)]
+const RTLD_NOW: i32 = 2;
+#[cfg(unix)]
+fn libc_dlopen(path: *const i8) -> *mut c_void {
+    unsafe { libc_raw::dlopen(path, RTLD_NOW) }
+}
+#[cfg(unix)]
+fn libc_dlsym(handle: *mut c_void, name: *const i8) -> *mut c_void {
+    unsafe { libc_raw::dlsym(handle, name) }
+}
+#[cfg(unix)]
+fn libc_dlclose(handle: *mut c_void) -> i32 {
+    unsafe { libc_raw::dlclose(handle) }
+}
 
 #[cfg(windows)]
 mod win_raw {
@@ -958,6 +1156,15 @@ mod win_raw {
         pub fn FreeLibrary(hModule: *mut c_void) -> i32;
     }
 }
-#[cfg(windows)] fn win_LoadLibraryW(name: *const u16) -> *mut c_void { unsafe { win_raw::LoadLibraryW(name) } }
-#[cfg(windows)] fn win_GetProcAddress(module: *mut c_void, name: *const u8) -> *mut c_void { unsafe { win_raw::GetProcAddress(module, name) } }
-#[cfg(windows)] fn win_FreeLibrary(module: *mut c_void) -> i32 { unsafe { win_raw::FreeLibrary(module) } }
+#[cfg(windows)]
+fn win_LoadLibraryW(name: *const u16) -> *mut c_void {
+    unsafe { win_raw::LoadLibraryW(name) }
+}
+#[cfg(windows)]
+fn win_GetProcAddress(module: *mut c_void, name: *const u8) -> *mut c_void {
+    unsafe { win_raw::GetProcAddress(module, name) }
+}
+#[cfg(windows)]
+fn win_FreeLibrary(module: *mut c_void) -> i32 {
+    unsafe { win_raw::FreeLibrary(module) }
+}

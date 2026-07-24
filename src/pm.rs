@@ -127,7 +127,7 @@ out = "{}"
     );
 
     fs::write("plix.toml", toml_content).map_err(|e| e.to_string())?;
-    fs::write("main.px", "say(\"Hello from Plix 0.9.9!\");\n").map_err(|e| e.to_string())?;
+    fs::write("main.px", "say(\"Hello from Plix 0.9.13!\");\n").map_err(|e| e.to_string())?;
 
     println!("Initialized new Plix project: {}", name);
     Ok(())
@@ -142,7 +142,7 @@ pub fn list_packages() -> Result<(), String> {
         return Ok(());
     }
 
-    println!("Global Registry (v0.9.9):");
+    println!("Global Registry (v0.9.13):");
     for entry in fs::read_dir(registry_dir).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
         println!("  - {}", entry.file_name().to_string_lossy());
